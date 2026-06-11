@@ -5,6 +5,15 @@ import { Redis } from "@upstash/redis";
 
 const TOKEN_KEY = "pacer:oura_tokens";
 
+// Vercel's Upstash/KV integration injects KV_REST_API_* names; older setups use
+// UPSTASH_REDIS_REST_*. Accept either so Redis.fromEnv()'s naming isn't required.
+function redisFromEnv() {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error("Redis env vars not set");
+  return new Redis({ url, token });
+}
+
 async function getValidAccessToken(redis) {
   const stored = await redis.get(TOKEN_KEY);
   if (!stored) return { error: "Oura not connected yet — visit /api/oura-setup once to authorize." };
@@ -41,7 +50,7 @@ export default async function handler(req, res) {
     return res.status(503).json({ error: "Set OURA_CLIENT_ID and OURA_CLIENT_SECRET in Vercel env vars." });
   }
   let redis;
-  try { redis = Redis.fromEnv(); }
+  try { redis = redisFromEnv(); }
   catch { return res.status(503).json({ error: "Connect Upstash Redis in Vercel → Storage first (token storage lives there)." }); }
 
   const { start, end } = req.query;

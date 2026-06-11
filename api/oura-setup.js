@@ -8,6 +8,15 @@ import { Redis } from "@upstash/redis";
 const TOKEN_KEY = "pacer:oura_tokens";
 const SCOPES = "personal daily heartrate workout session";
 
+// Vercel's Upstash/KV integration injects KV_REST_API_* names; older setups use
+// UPSTASH_REDIS_REST_*. Accept either so Redis.fromEnv()'s naming isn't required.
+function redisFromEnv() {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error("Redis env vars not set");
+  return new Redis({ url, token });
+}
+
 export default async function handler(req, res) {
   const { OURA_CLIENT_ID, OURA_CLIENT_SECRET } = process.env;
   if (!OURA_CLIENT_ID || !OURA_CLIENT_SECRET) {
@@ -33,7 +42,7 @@ export default async function handler(req, res) {
       if (!j.access_token) {
         return res.status(400).send("Token exchange failed: " + JSON.stringify(j).slice(0, 300) + " — check that the Redirect URI in your Oura app settings is exactly " + redirectUri);
       }
-      const redis = Redis.fromEnv();
+      const redis = redisFromEnv();
       await redis.set(TOKEN_KEY, JSON.stringify({
         access_token: j.access_token,
         refresh_token: j.refresh_token,

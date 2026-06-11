@@ -4,10 +4,19 @@
 
 import { Redis } from "@upstash/redis";
 
+// Vercel's Upstash/KV integration injects KV_REST_API_* names; older setups use
+// UPSTASH_REDIS_REST_*. Accept either so Redis.fromEnv()'s naming isn't required.
+function redisFromEnv() {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error("Redis env vars not set");
+  return new Redis({ url, token });
+}
+
 export default async function handler(req, res) {
   let redis;
   try {
-    redis = Redis.fromEnv();
+    redis = redisFromEnv();
   } catch {
     return res.status(503).json({ error: "Cloud storage not configured yet — connect Upstash Redis in Vercel → Storage." });
   }
