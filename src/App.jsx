@@ -430,7 +430,7 @@ export default function App() {
       <div className="band" style={{ marginBottom: 16 }} />
 
       {tab === "today" && <Today viewDate={viewDate} logs={logs} updateLogs={updateLogs} Z={Z} settings={settings} updateSettings={updateSettings} />}
-      {tab === "log" && <PostRun viewDate={viewDate} setViewDate={setViewDate} logs={logs} updateLogs={updateLogs} Z={Z} />}
+      {tab === "log" && <PostRun viewDate={viewDate} setViewDate={setViewDate} logs={logs} updateLogs={updateLogs} Z={Z} settings={settings} />}
       {tab === "plan" && <PlanView logs={logs} today={today} />}
       {tab === "setup" && <Setup settings={settings} updateSettings={updateSettings} Z={Z} />}
 
@@ -659,12 +659,13 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
 }
 
 /* ---------------- LOG ---------------- */
-function PostRun({ viewDate, setViewDate, logs, updateLogs, Z }) {
+function PostRun({ viewDate, setViewDate, logs, updateLogs, Z, settings }) {
   const saved = (logs[viewDate] && logs[viewDate].run) || null;
   const checkin = (logs[viewDate] && logs[viewDate].checkin) || null;
   const [form, setForm] = useState(saved || { dist: "", time: "", segPace: "", rpe: "5", notes: "", metrics: null, splits: null });
   const [verdict, setVerdict] = useState(saved ? saved.verdict : null);
   const [strava, setStrava] = useState({ busy: false, msg: "" });
+  const [grading, setGrading] = useState(false);
 
   useEffect(() => {
     const s = (logs[viewDate] && logs[viewDate].run) || null;
@@ -698,13 +699,13 @@ function PostRun({ viewDate, setViewDate, logs, updateLogs, Z }) {
   const type = workout ? classify(workout) : "ga";
   const meta = TYPE_META[type];
 
-  const grade = () => {
+  const localGrade = () => {
     const dist = Number(form.dist);
     const t = parseGoal(form.time.split(":").length === 2 ? "0:" + form.time : form.time);
     const avg = t && dist ? t / dist : null;
     const heat = checkin && checkin.result && checkin.result.heat ? checkin.result.heat : null;
-    const lo = heat ? heat.lo : (checkin && checkin.result && checkin.result.hf) || 0;
-    const hi = heat ? heat.hi : (checkin && checkin.result && checkin.result.hf) || 0;
+    const lo = heat ? heat.lo : 0;
+    const hi = heat ? heat.hi : 0;
     const zone = Z[type] ? [Z[type][0] * (1 + lo), Z[type][1] * (1 + hi)] : null;
     const segSec = form.segPace ? parseGoal("0:" + form.segPace) : null;
     const rpe = Number(form.rpe);
@@ -732,9 +733,90 @@ function PostRun({ viewDate, setViewDate, logs, updateLogs, Z }) {
         lines.push(`Max HR ran ${drift} beats above average — big late-session spike. Fine in a workout, but check fueling if it came with fading splits.`);
       }
     }
-    const v = lines.join(" ");
+    return lines.join(" ");
+  };
+
+  // Assemble the run + recent training context the AI coach reasons over.
+  const buildDebrief = () => {
+    const dist = Number(form.dist) || null;
+    const t = form.time ? parseGoal(form.time.split(":").length === 2 ? "0:" + form.time : form.time) : null;
+    const avgPace = t && dist ? fmtPace(t / dist) : null;
+    const segSec = form.segPace ? parseGoal("0:" + form.segPace) : null;
+    const ci = checkin ? {
+      readiness: checkin.readiness || null,
+      sleep: checkin.sleep || null,
+      hrv: checkin.hrv || null,
+      rhr: checkin.rhr || null,
+      tempF: checkin.temp || null,
+      tempDewSum: checkin.result && checkin.result.heat ? checkin.result.heat.sum : null,
+    } : null;
+    const recent = Object.entries(logs)
+      .filter(([k, v]) => v.run && k < viewDate)
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .slice(0, 10)
+      .map(([k, v]) => {
+        const pIdx = planIndex(new Date(k + "T12:00:00"));
+        const rd = Number(v.run.dist) || null;
+        const rt = v.run.time ? parseGoal(v.run.time.split(":").length === 2 ? "0:" + v.run.time : v.run.time) : null;
+        return {
+          date: k,
+          planned: pIdx ? PLAN[pIdx.week].days[pIdx.day] : null,
+          miles: rd,
+          avgPace: rt && rd ? fmtPace(rt / rd) : null,
+          rpe: v.run.rpe || null,
+          avgHR: v.run.metrics && v.run.metrics.avgHR ? v.run.metrics.avgHR : null,
+        };
+      });
+    const last7dMiles = +([{ date: viewDate, miles: dist || 0 }, ...recent.map(r => ({ date: r.date, miles: r.miles || 0 }))]
+      .filter(e => {
+        const diff = (new Date(viewDate + "T12:00:00") - new Date(e.date + "T12:00:00")) / 86400000;
+        return diff >= 0 && diff < 7;
+      })
+      .reduce((s, e) => s + e.miles, 0)).toFixed(1);
+    return {
+      goal: settings.goal,
+      today: {
+        date: viewDate,
+        dayOfWeek: idx ? DAY_NAMES[idx.day] : null,
+        weekOfPlan: idx ? 18 - idx.week : null,
+        block: idx ? PLAN[idx.week].block : null,
+        plannedWorkout: workout,
+        workoutType: meta.label,
+        isQuality: meta.quality,
+        distanceMi: dist,
+        totalTime: form.time || null,
+        avgPace,
+        workSegmentPace: segSec ? fmtPace(segSec) : null,
+        targetZone: Z[type] ? `${fmtPace(Z[type][0])}–${fmtPace(Z[type][1])}` : null,
+        marathonPaceZone: `${fmtPace(Z.mp[0])}–${fmtPace(Z.mp[1])}`,
+        rpe: form.rpe,
+        notes: form.notes || null,
+        metrics: form.metrics || null,
+        splits: form.splits ? form.splits.map(s => ({ mile: s.mile, pace: fmtPace(s.paceSec), avgHR: s.avgHR, elevDiffFt: s.elevDiffFt })) : null,
+        morningCheckin: ci,
+      },
+      recentRuns: recent,
+      last7dMiles,
+    };
+  };
+
+  const grade = async () => {
+    setGrading(true);
+    let v = localGrade(); // rule-based fallback if the AI debrief is unavailable
+    try {
+      const r = await fetch("/api/debrief", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildDebrief()),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        if (j.verdict && j.verdict.trim()) v = j.verdict.trim();
+      }
+    } catch { /* keep the local fallback */ }
     setVerdict(v);
     updateLogs(viewDate, { run: { ...form, verdict: v } });
+    setGrading(false);
   };
 
   return (
@@ -772,7 +854,7 @@ function PostRun({ viewDate, setViewDate, logs, updateLogs, Z }) {
         <input type="range" min="1" max="10" value={form.rpe} onChange={e => setForm({ ...form, rpe: e.target.value })} style={{ width: "100%" }} />
         <label className="f">Notes</label>
         <textarea className="f" rows={2} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
-        <button className="btn alt" onClick={grade} disabled={!form.dist || !form.time} style={{ opacity: (!form.dist || !form.time) ? 0.5 : 1 }}>How did I do?</button>
+        <button className="btn alt" onClick={grade} disabled={!form.dist || !form.time || grading} style={{ opacity: (!form.dist || !form.time || grading) ? 0.5 : 1 }}>{grading ? "Analyzing your run…" : "How did I do?"}</button>
       </div>
       {verdict && (
         <div className="card" style={{ borderLeft: "5px solid #0F5870" }}>
