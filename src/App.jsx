@@ -465,6 +465,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
   const [result, setResult] = useState(savedCheckin ? savedCheckin.result : null);
   const [sync, setSync] = useState({ busy: false, msg: "" });
   const [recovering, setRecovering] = useState(false);
+  const [building, setBuilding] = useState(false);
 
   if (!idx) return <div className="card">This date falls outside the 18-week block (Jun 8 – Oct 11).</div>;
 
@@ -500,7 +501,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
     setSync({ busy: false, msg: msgs.join(" · ") });
   };
 
-  const run = () => {
+  const run = async () => {
     const tempF = Number(form.temp);
     const dewF = form.dew !== "" ? Number(form.dew)
       : form.humidity !== "" ? Math.round(dewPointF(tempF, Number(form.humidity)))
@@ -523,9 +524,45 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
     const isRaceLoad = wk.wk === 0 && idx.day >= 3 && idx.day <= 5;
     const weightKg = Number(settings.weightLb) ? Number(settings.weightLb) / 2.205 : null;
     const daily = dailyCarbs({ type, tomorrowType, isRaceLoad, weightKg, durationMin: fuel ? fuel.durationMin : null });
-    const res = { heat, ready, adjZone, fuel, daily, hrvDelta: Math.round(hrvDelta), rhrDelta };
+
+    // AI coaching paragraph around the computed recommendation + numbers (rule-based advice is the fallback).
+    setBuilding(true);
+    let aiAdvice = null;
+    try {
+      const recent = Object.entries(logs)
+        .filter(([k, v]) => v.run && k < viewDate)
+        .sort((a, b) => b[0].localeCompare(a[0]))
+        .slice(0, 7)
+        .map(([k, v]) => {
+          const p = planIndex(new Date(k + "T12:00:00"));
+          return { date: k, planned: p ? PLAN[p.week].days[p.day] : null, miles: Number(v.run.dist) || null, rpe: v.run.rpe || null, avgHR: v.run.metrics && v.run.metrics.avgHR ? v.run.metrics.avgHR : null };
+        });
+      const last7dMiles = +(recent
+        .filter(r => { const diff = (new Date(viewDate + "T12:00:00") - new Date(r.date + "T12:00:00")) / 86400000; return diff >= 0 && diff < 7; })
+        .reduce((s, r) => s + (r.miles || 0), 0)).toFixed(1);
+      const ctx = {
+        goal: settings.goal,
+        today: { date: viewDate, dayOfWeek: DAY_NAMES[idx.day], weekOfPlan: 18 - idx.week, block: wk.block, plannedWorkout: workout, workoutType: meta.label, isQuality: meta.quality },
+        recommendation: ["run as written", "soften to the easy end", "downgrade to easy"][ready.tier],
+        conditions: {
+          tempF: form.temp || null, dewF, tempDewSum: heat.sum,
+          heatAdjustPctLow: +(heat.lo * 100).toFixed(1), heatAdjustPctHigh: +(heat.hi * 100).toFixed(1),
+          noHardRunning: heat.noHard, adjustedTargetZone: adjZone ? `${fmtPace(adjZone[0])}–${fmtPace(adjZone[1])}` : null,
+        },
+        recovery: { readiness: form.readiness || null, sleep: form.sleep || null, hrv: form.hrv || null, rhr: form.rhr || null, hrvDeltaPct: Math.round(hrvDelta), rhrDelta, flags: ready.flags },
+        recentRuns: recent,
+        last7dMiles,
+        tomorrow: tomorrowIdx ? PLAN[tomorrowIdx.week].days[tomorrowIdx.day] : null,
+        notes: form.notes || null,
+      };
+      const r = await fetch("/api/briefing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ctx) });
+      if (r.ok) { const j = await r.json(); if (j.advice && j.advice.trim()) aiAdvice = j.advice.trim(); }
+    } catch { /* keep the rule-based advice */ }
+
+    const res = { heat, ready, adjZone, fuel, daily, aiAdvice, hrvDelta: Math.round(hrvDelta), rhrDelta };
     setResult(res);
     updateLogs(viewDate, { checkin: { ...form, result: res } });
+    setBuilding(false);
   };
 
   // Rest / cross-train days: read recovery markers and advise rest vs. light cross-training.
@@ -604,19 +641,15 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
           <div><label className="f">Resting HR (bpm)</label>
             <input className="f" inputMode="numeric" value={form.rhr} onChange={e => setForm({ ...form, rhr: e.target.value })} /></div>
         </div>
-        {isRest && (
-          <>
-            <label className="f">Note to your coach (optional)</label>
-            <textarea className="f" rows={2} value={form.notes || ""} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="e.g. traveling, hotel has a pool; or feeling a tight calf" />
-          </>
-        )}
+        <label className="f">Note to your coach (optional)</label>
+        <textarea className="f" rows={2} value={form.notes || ""} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder={isRest ? "e.g. traveling, hotel has a pool; or a tight calf" : "e.g. legs feel heavy; traveling, treadmill only"} />
         {isRest ? (
           <button className="btn" onClick={runRecovery} disabled={!form.readiness || recovering} style={{ opacity: (!form.readiness || recovering) ? 0.5 : 1 }}>
             {recovering ? "Reading your recovery…" : "Read my recovery"}
           </button>
         ) : (
-          <button className="btn" onClick={run} disabled={!form.temp || !form.readiness} style={{ opacity: (!form.temp || !form.readiness) ? 0.5 : 1 }}>
-            Build today's briefing
+          <button className="btn" onClick={run} disabled={!form.temp || !form.readiness || building} style={{ opacity: (!form.temp || !form.readiness || building) ? 0.5 : 1 }}>
+            {building ? "Building today's briefing…" : "Build today's briefing"}
           </button>
         )}
       </div>
@@ -624,7 +657,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
       {result && !isRest && (
         <div className="card" style={{ borderLeft: `5px solid ${tierColors[result.ready.tier]}` }}>
           <div className="eyebrow" style={{ color: tierColors[result.ready.tier] }}>{result.ready.title}</div>
-          <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.5 }}>{result.ready.advice}</p>
+          <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.55 }}>{result.aiAdvice || result.ready.advice}</p>
           {result.ready.flags.length > 0 && <p style={{ marginTop: 8, fontSize: 13, color: "#0F5870" }}>Flags: {result.ready.flags.join(" · ")}.</p>}
           {result.heat && result.heat.noHard && (
             <p style={{ marginTop: 8, fontSize: 13, color: "#E4393F", fontWeight: 600 }}>
