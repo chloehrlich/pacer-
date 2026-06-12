@@ -334,6 +334,19 @@ const Star = ({ size = 14, color = "#E4393F", style }) => (
   </svg>
 );
 
+/* ---------- rest-day recovery guidance (by readiness tier) ---------- */
+const RECOVERY_TITLE = ["Well recovered", "Still absorbing", "Run down — rest up"];
+const RECOVERY_ADVICE = [
+  "Your recovery markers look strong. A full rest day will leave you fresh for tomorrow's session — but if you want to move, easy cross-training is a green light. Keep it aerobic and conversational; today builds nothing, it just helps you absorb what you've already banked.",
+  "You're still carrying some fatigue from the week. Lean toward genuine rest or very light movement — nothing structured. Let the adaptation catch up so tomorrow's run lands well.",
+  "Your recovery data is low today. Make this a real rest day — that's where the fitness actually gets built. Protect sleep, food, and hydration above all.",
+];
+const RECOVERY_CROSS = [
+  "Optional: 30–45 min easy spin, easy swim, or a brisk walk — heart rate low and chatty the whole way. Either way, 10 minutes of mobility or stretching keeps the legs loose.",
+  "Keep it gentle if you move at all: an easy walk, a relaxed swim, or 15–20 min of yoga or mobility work. Skip bike intervals and the long hike.",
+  "Full rest, or at most light stretching and a short easy walk to move some blood. Nothing that adds training load today.",
+];
+
 /* ============================================================ */
 
 export default function App() {
@@ -461,16 +474,18 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
   const isRest = type === "rest";
 
   const autoFill = async () => {
-    setSync({ busy: true, msg: "Pulling Oura + weather…" });
+    setSync({ busy: true, msg: isRest ? "Pulling Oura…" : "Pulling Oura + weather…" });
     const next = { ...form };
     const msgs = [];
-    try {
-      const w = await fetchWeather();
-      next.temp = String(w.temp);
-      next.humidity = String(w.humidity);
-      next.dew = String(w.dew);
-      msgs.push(`Weather: ${w.temp}°F, dew point ${w.dew}°F (T+DP = ${w.temp + w.dew})`);
-    } catch { msgs.push("Weather: location blocked — enter temp + dew point manually"); }
+    if (!isRest) {
+      try {
+        const w = await fetchWeather();
+        next.temp = String(w.temp);
+        next.humidity = String(w.humidity);
+        next.dew = String(w.dew);
+        msgs.push(`Weather: ${w.temp}°F, dew point ${w.dew}°F (T+DP = ${w.temp + w.dew})`);
+      } catch { msgs.push("Weather: location blocked — enter temp + dew point manually"); }
+    }
     try {
       const o = await fetchOura(viewDate);
       if (o.readiness != null) next.readiness = String(o.readiness);
@@ -512,6 +527,18 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
     updateLogs(viewDate, { checkin: { ...form, result: res } });
   };
 
+  // Rest / cross-train days: read recovery markers and advise rest vs. light cross-training.
+  const runRecovery = () => {
+    const baseHRV = Number(settings.baseHRV) || null;
+    const baseRHR = Number(settings.baseRHR) || null;
+    const hrvDelta = baseHRV && form.hrv ? ((Number(form.hrv) - baseHRV) / baseHRV) * 100 : 0;
+    const rhrDelta = baseRHR && form.rhr ? Number(form.rhr) - baseRHR : 0;
+    const ready = assessReadiness({ readiness: form.readiness || 80, sleep: form.sleep, hrvDelta, rhrDelta }, false);
+    const res = { recovery: true, ready, hrvDelta: Math.round(hrvDelta), rhrDelta };
+    setResult(res);
+    updateLogs(viewDate, { checkin: { ...form, result: res } });
+  };
+
   const tierColors = ["#1B7F4D", "#C77B00", "#E4393F"];
 
   return (
@@ -521,36 +548,42 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
         <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginTop: 6, lineHeight: 1.15 }}>{workout}</div>
       </div>
 
-      {!isRest && (
-        <div className="card">
-          <div className="eyebrow">Pre-run check-in</div>
-          <button className="btn ghost" onClick={autoFill} disabled={sync.busy} style={{ marginTop: 12, opacity: sync.busy ? 0.6 : 1 }}>
-            {sync.busy ? "Syncing…" : "⟳ Sync Oura + weather"}
-          </button>
-          {sync.msg && <p className="syncmsg" style={{ color: "#0F5870" }}>{sync.msg}</p>}
+      <div className="card">
+        <div className="eyebrow">{isRest ? "Recovery check-in" : "Pre-run check-in"}</div>
+        <button className="btn ghost" onClick={autoFill} disabled={sync.busy} style={{ marginTop: 12, opacity: sync.busy ? 0.6 : 1 }}>
+          {sync.busy ? "Syncing…" : isRest ? "⟳ Sync Oura" : "⟳ Sync Oura + weather"}
+        </button>
+        {sync.msg && <p className="syncmsg" style={{ color: "#0F5870" }}>{sync.msg}</p>}
+        {!isRest && (
           <div className="row2">
             <div><label className="f">Temperature (°F)</label>
               <input className="f" inputMode="numeric" value={form.temp} onChange={e => setForm({ ...form, temp: e.target.value })} /></div>
             <div><label className="f">Dew point (°F)</label>
               <input className="f" inputMode="numeric" value={form.dew} onChange={e => setForm({ ...form, dew: e.target.value })} placeholder="auto from sync" /></div>
           </div>
-          <div className="row2">
-            <div><label className="f">Oura readiness</label>
-              <input className="f" inputMode="numeric" value={form.readiness} onChange={e => setForm({ ...form, readiness: e.target.value })} /></div>
-            <div><label className="f">Sleep score</label>
-              <input className="f" inputMode="numeric" value={form.sleep} onChange={e => setForm({ ...form, sleep: e.target.value })} /></div>
-          </div>
-          <div className="row2">
-            <div><label className="f">Last-night HRV (ms)</label>
-              <input className="f" inputMode="numeric" value={form.hrv} onChange={e => setForm({ ...form, hrv: e.target.value })} /></div>
-            <div><label className="f">Resting HR (bpm)</label>
-              <input className="f" inputMode="numeric" value={form.rhr} onChange={e => setForm({ ...form, rhr: e.target.value })} /></div>
-          </div>
+        )}
+        <div className="row2">
+          <div><label className="f">Oura readiness</label>
+            <input className="f" inputMode="numeric" value={form.readiness} onChange={e => setForm({ ...form, readiness: e.target.value })} /></div>
+          <div><label className="f">Sleep score</label>
+            <input className="f" inputMode="numeric" value={form.sleep} onChange={e => setForm({ ...form, sleep: e.target.value })} /></div>
+        </div>
+        <div className="row2">
+          <div><label className="f">Last-night HRV (ms)</label>
+            <input className="f" inputMode="numeric" value={form.hrv} onChange={e => setForm({ ...form, hrv: e.target.value })} /></div>
+          <div><label className="f">Resting HR (bpm)</label>
+            <input className="f" inputMode="numeric" value={form.rhr} onChange={e => setForm({ ...form, rhr: e.target.value })} /></div>
+        </div>
+        {isRest ? (
+          <button className="btn" onClick={runRecovery} disabled={!form.readiness} style={{ opacity: !form.readiness ? 0.5 : 1 }}>
+            Read my recovery
+          </button>
+        ) : (
           <button className="btn" onClick={run} disabled={!form.temp || !form.readiness} style={{ opacity: (!form.temp || !form.readiness) ? 0.5 : 1 }}>
             Build today's briefing
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {result && !isRest && (
         <div className="card" style={{ borderLeft: `5px solid ${tierColors[result.ready.tier]}` }}>
@@ -629,6 +662,18 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
           {result.ready.tier === 2 && (
             <p style={{ marginTop: 10, fontSize: 12, color: "#0F5870" }}>If you take the downgrade to easy miles, scale this back — water and electrolytes only unless you're out past 75 min.</p>
           )}
+        </div>
+      )}
+
+      {isRest && result && result.recovery && (
+        <div className="card" style={{ borderLeft: `5px solid ${tierColors[result.ready.tier]}` }}>
+          <div className="eyebrow" style={{ color: tierColors[result.ready.tier] }}>{RECOVERY_TITLE[result.ready.tier]}</div>
+          <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.5 }}>{RECOVERY_ADVICE[result.ready.tier]}</p>
+          {result.ready.flags.length > 0 && <p style={{ marginTop: 8, fontSize: 13, color: "#0F5870" }}>Flags: {result.ready.flags.join(" · ")}.</p>}
+          <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+            <div className="eyebrow">Today's move</div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 4 }}>{RECOVERY_CROSS[result.ready.tier]}</p>
+          </div>
         </div>
       )}
 
