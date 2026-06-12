@@ -337,14 +337,14 @@ const Star = ({ size = 14, color = "#E4393F", style }) => (
 /* ---------- rest-day recovery guidance (by readiness tier) ---------- */
 const RECOVERY_TITLE = ["Well recovered", "Still absorbing", "Run down — rest up"];
 const RECOVERY_ADVICE = [
-  "Your recovery markers look strong. A full rest day will leave you fresh for tomorrow's session — but if you want to move, easy cross-training is a green light. Keep it aerobic and conversational; today builds nothing, it just helps you absorb what you've already banked.",
-  "You're still carrying some fatigue from the week. Lean toward genuine rest or very light movement — nothing structured. Let the adaptation catch up so tomorrow's run lands well.",
-  "Your recovery data is low today. Make this a real rest day — that's where the fitness actually gets built. Protect sleep, food, and hydration above all.",
+  "Markers look strong — you're absorbing the work well. Rest fully, or move easy if you feel like it.",
+  "Still carrying some fatigue. Lean toward genuine rest or very light movement only.",
+  "Recovery's low today. Take a real rest day — protect sleep, food, and hydration.",
 ];
 const RECOVERY_CROSS = [
-  "Optional: 30–45 min easy spin, easy swim, or a brisk walk — heart rate low and chatty the whole way. Either way, 10 minutes of mobility or stretching keeps the legs loose.",
-  "Keep it gentle if you move at all: an easy walk, a relaxed swim, or 15–20 min of yoga or mobility work. Skip bike intervals and the long hike.",
-  "Full rest, or at most light stretching and a short easy walk to move some blood. Nothing that adds training load today.",
+  "Optional: 30–45 min easy spin, swim, or brisk walk, all conversational. A little mobility or stretching keeps you loose.",
+  "If you move: an easy walk, relaxed swim, or 15–20 min of yoga/mobility. Nothing structured.",
+  "Full rest, or light stretching and a short walk at most. No added load today.",
 ];
 
 /* ============================================================ */
@@ -464,8 +464,6 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
   const [form, setForm] = useState(savedCheckin || { temp: "", dew: "", humidity: "", readiness: "", sleep: "", hrv: "", rhr: "" });
   const [result, setResult] = useState(savedCheckin ? savedCheckin.result : null);
   const [sync, setSync] = useState({ busy: false, msg: "" });
-  const [recovering, setRecovering] = useState(false);
-  const [building, setBuilding] = useState(false);
 
   if (!idx) return <div className="card">This date falls outside the 18-week block (Jun 8 – Oct 11).</div>;
 
@@ -501,7 +499,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
     setSync({ busy: false, msg: msgs.join(" · ") });
   };
 
-  const run = async () => {
+  const run = () => {
     const tempF = Number(form.temp);
     const dewF = form.dew !== "" ? Number(form.dew)
       : form.humidity !== "" ? Math.round(dewPointF(tempF, Number(form.humidity)))
@@ -524,86 +522,21 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
     const isRaceLoad = wk.wk === 0 && idx.day >= 3 && idx.day <= 5;
     const weightKg = Number(settings.weightLb) ? Number(settings.weightLb) / 2.205 : null;
     const daily = dailyCarbs({ type, tomorrowType, isRaceLoad, weightKg, durationMin: fuel ? fuel.durationMin : null });
-
-    // AI coaching paragraph around the computed recommendation + numbers (rule-based advice is the fallback).
-    setBuilding(true);
-    let aiAdvice = null;
-    try {
-      const recent = Object.entries(logs)
-        .filter(([k, v]) => v.run && k < viewDate)
-        .sort((a, b) => b[0].localeCompare(a[0]))
-        .slice(0, 7)
-        .map(([k, v]) => {
-          const p = planIndex(new Date(k + "T12:00:00"));
-          return { date: k, planned: p ? PLAN[p.week].days[p.day] : null, miles: Number(v.run.dist) || null, rpe: v.run.rpe || null, avgHR: v.run.metrics && v.run.metrics.avgHR ? v.run.metrics.avgHR : null };
-        });
-      const last7dMiles = +(recent
-        .filter(r => { const diff = (new Date(viewDate + "T12:00:00") - new Date(r.date + "T12:00:00")) / 86400000; return diff >= 0 && diff < 7; })
-        .reduce((s, r) => s + (r.miles || 0), 0)).toFixed(1);
-      const ctx = {
-        goal: settings.goal,
-        today: { date: viewDate, dayOfWeek: DAY_NAMES[idx.day], weekOfPlan: 18 - idx.week, block: wk.block, plannedWorkout: workout, workoutType: meta.label, isQuality: meta.quality },
-        recommendation: ["run as written", "soften to the easy end", "downgrade to easy"][ready.tier],
-        conditions: {
-          tempF: form.temp || null, dewF, tempDewSum: heat.sum,
-          heatAdjustPctLow: +(heat.lo * 100).toFixed(1), heatAdjustPctHigh: +(heat.hi * 100).toFixed(1),
-          noHardRunning: heat.noHard, adjustedTargetZone: adjZone ? `${fmtPace(adjZone[0])}–${fmtPace(adjZone[1])}` : null,
-        },
-        recovery: { readiness: form.readiness || null, sleep: form.sleep || null, hrv: form.hrv || null, rhr: form.rhr || null, hrvDeltaPct: Math.round(hrvDelta), rhrDelta, flags: ready.flags },
-        recentRuns: recent,
-        last7dMiles,
-        tomorrow: tomorrowIdx ? PLAN[tomorrowIdx.week].days[tomorrowIdx.day] : null,
-        notes: form.notes || null,
-      };
-      const r = await fetch("/api/briefing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ctx) });
-      if (r.ok) { const j = await r.json(); if (j.advice && j.advice.trim()) aiAdvice = j.advice.trim(); }
-    } catch { /* keep the rule-based advice */ }
-
-    const res = { heat, ready, adjZone, fuel, daily, aiAdvice, hrvDelta: Math.round(hrvDelta), rhrDelta };
+    const res = { heat, ready, adjZone, fuel, daily, hrvDelta: Math.round(hrvDelta), rhrDelta };
     setResult(res);
     updateLogs(viewDate, { checkin: { ...form, result: res } });
-    setBuilding(false);
   };
 
   // Rest / cross-train days: read recovery markers and advise rest vs. light cross-training.
-  // AI-written via /api/recovery, with a rule-based fallback (RECOVERY_* by tier).
-  const runRecovery = async () => {
+  const runRecovery = () => {
     const baseHRV = Number(settings.baseHRV) || null;
     const baseRHR = Number(settings.baseRHR) || null;
     const hrvDelta = baseHRV && form.hrv ? ((Number(form.hrv) - baseHRV) / baseHRV) * 100 : 0;
     const rhrDelta = baseRHR && form.rhr ? Number(form.rhr) - baseRHR : 0;
     const ready = assessReadiness({ readiness: form.readiness || 80, sleep: form.sleep, hrvDelta, rhrDelta }, false);
-    setRecovering(true);
-    let aiText = null;
-    try {
-      const tIdx = planIndex(new Date(d.getTime() + 86400000));
-      const recent = Object.entries(logs)
-        .filter(([k, v]) => v.run && k < viewDate)
-        .sort((a, b) => b[0].localeCompare(a[0]))
-        .slice(0, 7)
-        .map(([k, v]) => ({ date: k, miles: Number(v.run.dist) || null, rpe: v.run.rpe || null }));
-      const last7dMiles = +(recent
-        .filter(r => { const diff = (new Date(viewDate + "T12:00:00") - new Date(r.date + "T12:00:00")) / 86400000; return diff >= 0 && diff < 7; })
-        .reduce((s, r) => s + (r.miles || 0), 0)).toFixed(1);
-      const ctx = {
-        goal: settings.goal,
-        today: { date: viewDate, dayOfWeek: DAY_NAMES[idx.day], weekOfPlan: 18 - idx.week, block: wk.block, planned: workout, tomorrow: tIdx ? PLAN[tIdx.week].days[tIdx.day] : null },
-        recovery: {
-          readiness: form.readiness || null, sleep: form.sleep || null, hrv: form.hrv || null, rhr: form.rhr || null,
-          baseHRV: settings.baseHRV || null, baseRHR: settings.baseRHR || null,
-          hrvDeltaPct: Math.round(hrvDelta), rhrDelta,
-        },
-        recentRuns: recent,
-        last7dMiles,
-        notes: form.notes || null,
-      };
-      const r = await fetch("/api/recovery", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ctx) });
-      if (r.ok) { const j = await r.json(); if (j.readout && j.readout.trim()) aiText = j.readout.trim(); }
-    } catch { /* keep the rule-based fallback */ }
-    const res = { recovery: true, ready, aiText, hrvDelta: Math.round(hrvDelta), rhrDelta };
+    const res = { recovery: true, ready, hrvDelta: Math.round(hrvDelta), rhrDelta };
     setResult(res);
     updateLogs(viewDate, { checkin: { ...form, result: res } });
-    setRecovering(false);
   };
 
   const tierColors = ["#1B7F4D", "#C77B00", "#E4393F"];
@@ -641,15 +574,13 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
           <div><label className="f">Resting HR (bpm)</label>
             <input className="f" inputMode="numeric" value={form.rhr} onChange={e => setForm({ ...form, rhr: e.target.value })} /></div>
         </div>
-        <label className="f">Note to your coach (optional)</label>
-        <textarea className="f" rows={2} value={form.notes || ""} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder={isRest ? "e.g. traveling, hotel has a pool; or a tight calf" : "e.g. legs feel heavy; traveling, treadmill only"} />
         {isRest ? (
-          <button className="btn" onClick={runRecovery} disabled={!form.readiness || recovering} style={{ opacity: (!form.readiness || recovering) ? 0.5 : 1 }}>
-            {recovering ? "Reading your recovery…" : "Read my recovery"}
+          <button className="btn" onClick={runRecovery} disabled={!form.readiness} style={{ opacity: !form.readiness ? 0.5 : 1 }}>
+            Read my recovery
           </button>
         ) : (
-          <button className="btn" onClick={run} disabled={!form.temp || !form.readiness || building} style={{ opacity: (!form.temp || !form.readiness || building) ? 0.5 : 1 }}>
-            {building ? "Building today's briefing…" : "Build today's briefing"}
+          <button className="btn" onClick={run} disabled={!form.temp || !form.readiness} style={{ opacity: (!form.temp || !form.readiness) ? 0.5 : 1 }}>
+            Build today's briefing
           </button>
         )}
       </div>
@@ -657,7 +588,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
       {result && !isRest && (
         <div className="card" style={{ borderLeft: `5px solid ${tierColors[result.ready.tier]}` }}>
           <div className="eyebrow" style={{ color: tierColors[result.ready.tier] }}>{result.ready.title}</div>
-          <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.55 }}>{result.aiAdvice || result.ready.advice}</p>
+          <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.5 }}>{result.ready.advice}</p>
           {result.ready.flags.length > 0 && <p style={{ marginTop: 8, fontSize: 13, color: "#0F5870" }}>Flags: {result.ready.flags.join(" · ")}.</p>}
           {result.heat && result.heat.noHard && (
             <p style={{ marginTop: 8, fontSize: 13, color: "#E4393F", fontWeight: 600 }}>
@@ -737,17 +668,11 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
       {isRest && result && result.recovery && (
         <div className="card" style={{ borderLeft: `5px solid ${tierColors[result.ready.tier]}` }}>
           <div className="eyebrow" style={{ color: tierColors[result.ready.tier] }}>{RECOVERY_TITLE[result.ready.tier]}</div>
-          {result.aiText ? (
-            <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.55 }}>{result.aiText}</p>
-          ) : (
-            <>
-              <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.5 }}>{RECOVERY_ADVICE[result.ready.tier]}</p>
-              <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
-                <div className="eyebrow">Today's move</div>
-                <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 4 }}>{RECOVERY_CROSS[result.ready.tier]}</p>
-              </div>
-            </>
-          )}
+          <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.5 }}>{RECOVERY_ADVICE[result.ready.tier]}</p>
+          <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+            <div className="eyebrow">Today's move</div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 4 }}>{RECOVERY_CROSS[result.ready.tier]}</p>
+          </div>
           {result.ready.flags.length > 0 && <p style={{ marginTop: 8, fontSize: 13, color: "#0F5870" }}>Flags: {result.ready.flags.join(" · ")}.</p>}
         </div>
       )}
