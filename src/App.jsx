@@ -464,6 +464,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
   const [form, setForm] = useState(savedCheckin || { temp: "", dew: "", humidity: "", readiness: "", sleep: "", hrv: "", rhr: "" });
   const [result, setResult] = useState(savedCheckin ? savedCheckin.result : null);
   const [sync, setSync] = useState({ busy: false, msg: "" });
+  const [recovering, setRecovering] = useState(false);
 
   if (!idx) return <div className="card">This date falls outside the 18-week block (Jun 8 – Oct 11).</div>;
 
@@ -528,15 +529,44 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
   };
 
   // Rest / cross-train days: read recovery markers and advise rest vs. light cross-training.
-  const runRecovery = () => {
+  // AI-written via /api/recovery, with a rule-based fallback (RECOVERY_* by tier).
+  const runRecovery = async () => {
     const baseHRV = Number(settings.baseHRV) || null;
     const baseRHR = Number(settings.baseRHR) || null;
     const hrvDelta = baseHRV && form.hrv ? ((Number(form.hrv) - baseHRV) / baseHRV) * 100 : 0;
     const rhrDelta = baseRHR && form.rhr ? Number(form.rhr) - baseRHR : 0;
     const ready = assessReadiness({ readiness: form.readiness || 80, sleep: form.sleep, hrvDelta, rhrDelta }, false);
-    const res = { recovery: true, ready, hrvDelta: Math.round(hrvDelta), rhrDelta };
+    setRecovering(true);
+    let aiText = null;
+    try {
+      const tIdx = planIndex(new Date(d.getTime() + 86400000));
+      const recent = Object.entries(logs)
+        .filter(([k, v]) => v.run && k < viewDate)
+        .sort((a, b) => b[0].localeCompare(a[0]))
+        .slice(0, 7)
+        .map(([k, v]) => ({ date: k, miles: Number(v.run.dist) || null, rpe: v.run.rpe || null }));
+      const last7dMiles = +(recent
+        .filter(r => { const diff = (new Date(viewDate + "T12:00:00") - new Date(r.date + "T12:00:00")) / 86400000; return diff >= 0 && diff < 7; })
+        .reduce((s, r) => s + (r.miles || 0), 0)).toFixed(1);
+      const ctx = {
+        goal: settings.goal,
+        today: { date: viewDate, dayOfWeek: DAY_NAMES[idx.day], weekOfPlan: 18 - idx.week, block: wk.block, planned: workout, tomorrow: tIdx ? PLAN[tIdx.week].days[tIdx.day] : null },
+        recovery: {
+          readiness: form.readiness || null, sleep: form.sleep || null, hrv: form.hrv || null, rhr: form.rhr || null,
+          baseHRV: settings.baseHRV || null, baseRHR: settings.baseRHR || null,
+          hrvDeltaPct: Math.round(hrvDelta), rhrDelta,
+        },
+        recentRuns: recent,
+        last7dMiles,
+        notes: form.notes || null,
+      };
+      const r = await fetch("/api/recovery", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ctx) });
+      if (r.ok) { const j = await r.json(); if (j.readout && j.readout.trim()) aiText = j.readout.trim(); }
+    } catch { /* keep the rule-based fallback */ }
+    const res = { recovery: true, ready, aiText, hrvDelta: Math.round(hrvDelta), rhrDelta };
     setResult(res);
     updateLogs(viewDate, { checkin: { ...form, result: res } });
+    setRecovering(false);
   };
 
   const tierColors = ["#1B7F4D", "#C77B00", "#E4393F"];
@@ -574,9 +604,15 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
           <div><label className="f">Resting HR (bpm)</label>
             <input className="f" inputMode="numeric" value={form.rhr} onChange={e => setForm({ ...form, rhr: e.target.value })} /></div>
         </div>
+        {isRest && (
+          <>
+            <label className="f">Note to your coach (optional)</label>
+            <textarea className="f" rows={2} value={form.notes || ""} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="e.g. traveling, hotel has a pool; or feeling a tight calf" />
+          </>
+        )}
         {isRest ? (
-          <button className="btn" onClick={runRecovery} disabled={!form.readiness} style={{ opacity: !form.readiness ? 0.5 : 1 }}>
-            Read my recovery
+          <button className="btn" onClick={runRecovery} disabled={!form.readiness || recovering} style={{ opacity: (!form.readiness || recovering) ? 0.5 : 1 }}>
+            {recovering ? "Reading your recovery…" : "Read my recovery"}
           </button>
         ) : (
           <button className="btn" onClick={run} disabled={!form.temp || !form.readiness} style={{ opacity: (!form.temp || !form.readiness) ? 0.5 : 1 }}>
@@ -668,12 +704,18 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
       {isRest && result && result.recovery && (
         <div className="card" style={{ borderLeft: `5px solid ${tierColors[result.ready.tier]}` }}>
           <div className="eyebrow" style={{ color: tierColors[result.ready.tier] }}>{RECOVERY_TITLE[result.ready.tier]}</div>
-          <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.5 }}>{RECOVERY_ADVICE[result.ready.tier]}</p>
+          {result.aiText ? (
+            <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.55 }}>{result.aiText}</p>
+          ) : (
+            <>
+              <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.5 }}>{RECOVERY_ADVICE[result.ready.tier]}</p>
+              <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+                <div className="eyebrow">Today's move</div>
+                <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 4 }}>{RECOVERY_CROSS[result.ready.tier]}</p>
+              </div>
+            </>
+          )}
           {result.ready.flags.length > 0 && <p style={{ marginTop: 8, fontSize: 13, color: "#0F5870" }}>Flags: {result.ready.flags.join(" · ")}.</p>}
-          <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
-            <div className="eyebrow">Today's move</div>
-            <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 4 }}>{RECOVERY_CROSS[result.ready.tier]}</p>
-          </div>
         </div>
       )}
 
