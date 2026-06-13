@@ -334,6 +334,26 @@ const Star = ({ size = 14, color = "#E4393F", style }) => (
   </svg>
 );
 
+/* ---------- run-time estimator (Plan tab) ----------
+   Rough duration at goal-based pace, no heat. Quality days blend the work pace
+   with general-aerobic since they include easy warmup/cooldown/recovery miles. */
+function estimateRunSec(text, Z, goalSec) {
+  const type = classify(text);
+  if (type === "rest") return null;
+  if (type === "race") return goalSec;
+  const miles = parseMiles(text);
+  if (!miles) return null;
+  const gaMid = (Z.ga[0] + Z.ga[1]) / 2;
+  const zoneMid = Z[type] ? (Z[type][0] + Z[type][1]) / 2 : gaMid;
+  const paceMidSec = ["lt", "vo2", "mp", "tuneup"].includes(type) ? (zoneMid + gaMid) / 2 : zoneMid;
+  return miles * paceMidSec;
+}
+function fmtEstimate(sec) {
+  const total = Math.round(sec / 60); // whole minutes
+  const h = Math.floor(total / 60), m = total % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}` : `${m} min`;
+}
+
 /* ---------- rest-day recovery guidance (by readiness tier) ---------- */
 const RECOVERY_TITLE = ["Well recovered", "Still absorbing", "Run down — rest up"];
 const RECOVERY_ADVICE = [
@@ -444,7 +464,7 @@ export default function App() {
 
       {tab === "today" && <Today viewDate={viewDate} logs={logs} updateLogs={updateLogs} Z={Z} settings={settings} updateSettings={updateSettings} />}
       {tab === "log" && <PostRun viewDate={viewDate} setViewDate={setViewDate} logs={logs} updateLogs={updateLogs} Z={Z} settings={settings} />}
-      {tab === "plan" && <PlanView logs={logs} today={today} />}
+      {tab === "plan" && <PlanView logs={logs} today={today} Z={Z} goalSec={goalSec} />}
       {tab === "setup" && <Setup settings={settings} updateSettings={updateSettings} Z={Z} />}
 
       <nav className="tabs" aria-label="Sections">
@@ -945,11 +965,14 @@ function History({ logs }) {
 }
 
 /* ---------------- PLAN ---------------- */
-function PlanView({ logs, today }) {
+function PlanView({ logs, today, Z, goalSec }) {
   const cur = planIndex(today);
   const [open, setOpen] = useState(cur ? cur.week : 0);
   return (
     <>
+      <p style={{ margin: "0 16px 10px", fontSize: 12, color: "#0F5870" }}>
+        Times are estimates at your goal pace (no heat) — handy for planning your wake-up. Summer mornings run a touch slower.
+      </p>
       {PLAN.map((wk, wi) => {
         const monday = new Date(PLAN_START.getTime() + wi * 7 * 86400000);
         const label = monday.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -970,11 +993,13 @@ function PlanView({ logs, today }) {
                 {wk.days.map((dd, di) => {
                   const key = dateKey(new Date(PLAN_START.getTime() + (wi * 7 + di) * 86400000));
                   const done = logs[key] && logs[key].run;
+                  const est = estimateRunSec(dd, Z, goalSec);
                   return (
                     <div key={di} className="dayrow">
                       <span className="dn">{DAY_NAMES[di].slice(0, 3)}</span>
                       <span style={{ flex: 1, color: classify(dd) === "rest" ? "#7A99A6" : "#101C22" }}>{dd}</span>
-                      {done && <Star size={13} />}
+                      {est && <span className="bignum" style={{ fontSize: 13, color: "#0F5870", whiteSpace: "nowrap", marginLeft: 8 }}>~{fmtEstimate(est)}</span>}
+                      {done && <Star size={13} style={{ marginLeft: 6 }} />}
                     </div>
                   );
                 })}
