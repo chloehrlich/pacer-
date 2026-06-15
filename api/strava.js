@@ -73,50 +73,55 @@ export default async function handler(req, res) {
 
     const onDay = acts.filter(a => a.start_date_local && a.start_date_local.startsWith(date));
     if (!onDay.length) return res.status(404).json({ error: `No activity found on Strava for ${date}. Has your watch/app synced yet?` });
-    // Primary = longest by moving time (handles a shakeout + main session, or bike + lift)
-    const primary = onDay.sort((a, b) => (b.moving_time || 0) - (a.moving_time || 0))[0];
+
     const RUN_TYPES = ["Run", "TrailRun", "VirtualRun"];
-    const isRun = RUN_TYPES.includes(primary.type) || RUN_TYPES.includes(primary.sport_type);
+    const isRunAct = a => RUN_TYPES.includes(a.type) || RUN_TYPES.includes(a.sport_type);
+    const runActs = onDay.filter(isRunAct).sort((a, b) => (b.moving_time || 0) - (a.moving_time || 0));
+    const crossActs = onDay.filter(a => !isRunAct(a)).sort((a, b) => (b.moving_time || 0) - (a.moving_time || 0));
     const totalMovingTimeSec = onDay.reduce((s, a) => s + (a.moving_time || 0), 0);
 
-    const base = {
-      name: primary.name,
-      sportType: primary.sport_type || primary.type,
-      isRun,
-      startLocal: primary.start_date_local,
-      movingTimeSec: primary.moving_time,
-      elapsedTimeSec: primary.elapsed_time,
-      avgHR: primary.average_heartrate ? Math.round(primary.average_heartrate) : null,
-      maxHR: primary.max_heartrate ? Math.round(primary.max_heartrate) : null,
-      elevGainFt: primary.total_elevation_gain ? Math.round(primary.total_elevation_gain * 3.28084) : null,
-      distanceMi: primary.distance > 0 ? +(primary.distance / 1609.344).toFixed(2) : null,
-      otherCount: onDay.length - 1,
-      totalMovingTimeSec,
-    };
+    // The day's run (longest, if there are several), with mile splits.
+    let run = null;
+    if (runActs.length) {
+      const r0 = runActs[0];
+      const detail = await fetch(
+        `https://www.strava.com/api/v3/activities/${r0.id}`,
+        { headers: auth }
+      ).then(r => r.json());
+      const splits = (detail.splits_standard || []).map(s => ({
+        mile: s.split,
+        paceSec: s.distance > 0 ? s.moving_time / (s.distance / 1609.344) : null, // sec per mile
+        avgHR: s.average_heartrate ? Math.round(s.average_heartrate) : null,
+        elevDiffFt: s.elevation_difference != null ? Math.round(s.elevation_difference * 3.28084) : null,
+      }));
+      run = {
+        name: r0.name,
+        startLocal: r0.start_date_local,
+        distanceMi: +(r0.distance / 1609.344).toFixed(2),
+        movingTimeSec: r0.moving_time,
+        elapsedTimeSec: r0.elapsed_time,
+        avgHR: r0.average_heartrate ? Math.round(r0.average_heartrate) : null,
+        maxHR: r0.max_heartrate ? Math.round(r0.max_heartrate) : null,
+        elevGainFt: r0.total_elevation_gain ? Math.round(r0.total_elevation_gain * 3.28084) : null,
+        // Strava reports running cadence as single-leg rpm; double it for steps/min
+        cadenceSpm: r0.average_cadence ? Math.round(r0.average_cadence * 2) : null,
+        sufferScore: r0.suffer_score ?? null,
+        splits,
+      };
+    }
 
-    // Cross-training: no running splits/pace to grade — return the summary as-is.
-    if (!isRun) return res.status(200).json(base);
-
-    // Run: pull the detailed activity for mile splits + cadence.
-    const detail = await fetch(
-      `https://www.strava.com/api/v3/activities/${primary.id}`,
-      { headers: auth }
-    ).then(r => r.json());
-
-    const splits = (detail.splits_standard || []).map(s => ({
-      mile: s.split,
-      paceSec: s.distance > 0 ? s.moving_time / (s.distance / 1609.344) : null, // sec per mile
-      avgHR: s.average_heartrate ? Math.round(s.average_heartrate) : null,
-      elevDiffFt: s.elevation_difference != null ? Math.round(s.elevation_difference * 3.28084) : null,
+    // Every non-run activity that day (bike, lift, swim, ...).
+    const cross = crossActs.map(a => ({
+      sportType: a.sport_type || a.type,
+      name: a.name,
+      movingTimeSec: a.moving_time,
+      avgHR: a.average_heartrate ? Math.round(a.average_heartrate) : null,
+      maxHR: a.max_heartrate ? Math.round(a.max_heartrate) : null,
+      distanceMi: a.distance > 0 ? +(a.distance / 1609.344).toFixed(2) : null,
+      elevGainFt: a.total_elevation_gain ? Math.round(a.total_elevation_gain * 3.28084) : null,
     }));
 
-    return res.status(200).json({
-      ...base,
-      // Strava reports running cadence as single-leg rpm; double it for steps/min
-      cadenceSpm: primary.average_cadence ? Math.round(primary.average_cadence * 2) : null,
-      sufferScore: primary.suffer_score ?? null,
-      splits,
-    });
+    return res.status(200).json({ run, cross, totalMovingTimeSec });
   } catch (e) {
     return res.status(502).json({ error: "Strava request failed: " + e.message });
   }
