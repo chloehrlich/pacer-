@@ -726,16 +726,23 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
 /* ---------------- LOG ---------------- */
 function PostRun({ viewDate, setViewDate, logs, updateLogs, Z, settings }) {
   const saved = (logs[viewDate] && logs[viewDate].run) || null;
+  const savedCross = (logs[viewDate] && logs[viewDate].cross) || null;
   const checkin = (logs[viewDate] && logs[viewDate].checkin) || null;
-  const [form, setForm] = useState(saved || { dist: "", time: "", segPace: "", rpe: "5", notes: "", metrics: null, splits: null });
+  const blank = { dist: "", time: "", segPace: "", rpe: "5", notes: "", metrics: null, splits: null };
+  const [form, setForm] = useState(saved || (savedCross ? { ...blank, rpe: savedCross.rpe || "5", notes: savedCross.notes || "" } : blank));
   const [verdict, setVerdict] = useState(saved ? saved.verdict : null);
   const [strava, setStrava] = useState({ busy: false, msg: "" });
   const [grading, setGrading] = useState(false);
+  const [cross, setCross] = useState(savedCross);
+  const [crossSaved, setCrossSaved] = useState(false);
 
   useEffect(() => {
     const s = (logs[viewDate] && logs[viewDate].run) || null;
-    setForm(s || { dist: "", time: "", segPace: "", rpe: "5", notes: "", metrics: null, splits: null });
+    const c = (logs[viewDate] && logs[viewDate].cross) || null;
+    const b = { dist: "", time: "", segPace: "", rpe: "5", notes: "", metrics: null, splits: null };
+    setForm(s || (c ? { ...b, rpe: c.rpe || "5", notes: c.notes || "" } : b));
     setVerdict(s ? s.verdict : null);
+    setCross(c);
     setStrava({ busy: false, msg: "" });
   }, [viewDate]); // eslint-disable-line
 
@@ -745,17 +752,30 @@ function PostRun({ viewDate, setViewDate, logs, updateLogs, Z, settings }) {
       const r = await fetch(`/api/strava?date=${viewDate}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || `Strava returned ${r.status}`);
-      setForm(f => ({
-        ...f,
-        dist: String(j.distanceMi),
-        time: fmtDuration(j.movingTimeSec),
-        metrics: { avgHR: j.avgHR, maxHR: j.maxHR, elevGainFt: j.elevGainFt, cadenceSpm: j.cadenceSpm },
-        splits: j.splits,
-      }));
-      setStrava({ busy: false, msg: `Pulled "${j.name}" — ${j.distanceMi} mi, ${fmtDuration(j.movingTimeSec)}` });
+      if (j.isRun) {
+        setCross(null);
+        setForm(f => ({
+          ...f,
+          dist: String(j.distanceMi),
+          time: fmtDuration(j.movingTimeSec),
+          metrics: { avgHR: j.avgHR, maxHR: j.maxHR, elevGainFt: j.elevGainFt, cadenceSpm: j.cadenceSpm },
+          splits: j.splits,
+        }));
+        setStrava({ busy: false, msg: `Pulled "${j.name}" — ${j.distanceMi} mi, ${fmtDuration(j.movingTimeSec)}` });
+      } else {
+        setVerdict(null);
+        setCross({ sportType: j.sportType, name: j.name, movingTimeSec: j.movingTimeSec, avgHR: j.avgHR, maxHR: j.maxHR, distanceMi: j.distanceMi, elevGainFt: j.elevGainFt, otherCount: j.otherCount, totalMovingTimeSec: j.totalMovingTimeSec });
+        setStrava({ busy: false, msg: `Pulled "${j.name}" (${j.sportType}) — ${fmtDuration(j.movingTimeSec)}` });
+      }
     } catch (e) {
       setStrava({ busy: false, msg: e.message });
     }
+  };
+
+  const saveCross = () => {
+    updateLogs(viewDate, { cross: { ...cross, rpe: form.rpe, notes: form.notes } });
+    setCrossSaved(true);
+    setTimeout(() => setCrossSaved(false), 1800);
   };
 
   const d = new Date(viewDate + "T12:00:00");
@@ -895,31 +915,51 @@ function PostRun({ viewDate, setViewDate, logs, updateLogs, Z, settings }) {
           {strava.busy ? "Pulling…" : "⟳ Pull from Strava"}
         </button>
         {strava.msg && <p className="syncmsg" style={{ color: "#0F5870" }}>{strava.msg}</p>}
-        {form.metrics && (
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
-            {form.metrics.avgHR && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{form.metrics.avgHR}</strong> avg HR</span>}
-            {form.metrics.maxHR && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{form.metrics.maxHR}</strong> max HR</span>}
-            {form.metrics.elevGainFt != null && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{form.metrics.elevGainFt}</strong> ft gain</span>}
-            {form.metrics.cadenceSpm && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{form.metrics.cadenceSpm}</strong> spm</span>}
+        {cross ? (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+              <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{fmtDuration(cross.movingTimeSec)}</strong> {cross.sportType}</span>
+              {cross.avgHR && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{cross.avgHR}</strong> avg HR</span>}
+              {cross.maxHR && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{cross.maxHR}</strong> max HR</span>}
+              {cross.distanceMi && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{cross.distanceMi}</strong> mi</span>}
+              {cross.elevGainFt ? <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{cross.elevGainFt}</strong> ft</span> : null}
+            </div>
+            {cross.otherCount > 0 && <p style={{ fontSize: 12, color: "#0F5870", marginTop: 6 }}>+{cross.otherCount} other activit{cross.otherCount > 1 ? "ies" : "y"} today · {fmtDuration(cross.totalMovingTimeSec)} total moving time</p>}
+            <label className="f">Effort (RPE 1–10): {form.rpe}</label>
+            <input type="range" min="1" max="10" value={form.rpe} onChange={e => setForm({ ...form, rpe: e.target.value })} style={{ width: "100%" }} />
+            <label className="f">Notes</label>
+            <textarea className="f" rows={2} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
+            <button className="btn alt" onClick={saveCross}>{crossSaved ? "Saved ✓" : "Save cross-training"}</button>
           </div>
-        )}
-        <div className="row2">
-          <div><label className="f">Distance (mi)</label>
-            <input className="f" inputMode="decimal" value={form.dist} onChange={e => setForm({ ...form, dist: e.target.value })} /></div>
-          <div><label className="f">Total time (h:mm:ss)</label>
-            <input className="f" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })} placeholder="1:22:30" /></div>
-        </div>
-        {meta.quality && (
+        ) : (
           <>
-            <label className="f">Work-segment avg pace (m:ss /mi, optional)</label>
-            <input className="f" value={form.segPace} onChange={e => setForm({ ...form, segPace: e.target.value })} placeholder="8:05" />
+            {form.metrics && (
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+                {form.metrics.avgHR && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{form.metrics.avgHR}</strong> avg HR</span>}
+                {form.metrics.maxHR && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{form.metrics.maxHR}</strong> max HR</span>}
+                {form.metrics.elevGainFt != null && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{form.metrics.elevGainFt}</strong> ft gain</span>}
+                {form.metrics.cadenceSpm && <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 17 }}>{form.metrics.cadenceSpm}</strong> spm</span>}
+              </div>
+            )}
+            <div className="row2">
+              <div><label className="f">Distance (mi)</label>
+                <input className="f" inputMode="decimal" value={form.dist} onChange={e => setForm({ ...form, dist: e.target.value })} /></div>
+              <div><label className="f">Total time (h:mm:ss)</label>
+                <input className="f" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })} placeholder="1:22:30" /></div>
+            </div>
+            {meta.quality && (
+              <>
+                <label className="f">Work-segment avg pace (m:ss /mi, optional)</label>
+                <input className="f" value={form.segPace} onChange={e => setForm({ ...form, segPace: e.target.value })} placeholder="8:05" />
+              </>
+            )}
+            <label className="f">Effort (RPE 1–10): {form.rpe}</label>
+            <input type="range" min="1" max="10" value={form.rpe} onChange={e => setForm({ ...form, rpe: e.target.value })} style={{ width: "100%" }} />
+            <label className="f">Notes</label>
+            <textarea className="f" rows={2} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
+            <button className="btn alt" onClick={grade} disabled={!form.dist || !form.time || grading} style={{ opacity: (!form.dist || !form.time || grading) ? 0.5 : 1 }}>{grading ? "Analyzing your run…" : "How did I do?"}</button>
           </>
         )}
-        <label className="f">Effort (RPE 1–10): {form.rpe}</label>
-        <input type="range" min="1" max="10" value={form.rpe} onChange={e => setForm({ ...form, rpe: e.target.value })} style={{ width: "100%" }} />
-        <label className="f">Notes</label>
-        <textarea className="f" rows={2} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
-        <button className="btn alt" onClick={grade} disabled={!form.dist || !form.time || grading} style={{ opacity: (!form.dist || !form.time || grading) ? 0.5 : 1 }}>{grading ? "Analyzing your run…" : "How did I do?"}</button>
       </div>
       {verdict && (
         <div className="card" style={{ borderLeft: "5px solid #0F5870" }}>
@@ -992,7 +1032,7 @@ function PlanView({ logs, today, Z, goalSec }) {
               <div style={{ margin: "0 16px 14px", background: "#fff", border: "1px solid #DCEDF4", borderRadius: 12, padding: "6px 0" }}>
                 {wk.days.map((dd, di) => {
                   const key = dateKey(new Date(PLAN_START.getTime() + (wi * 7 + di) * 86400000));
-                  const done = logs[key] && logs[key].run;
+                  const done = logs[key] && (logs[key].run || logs[key].cross);
                   const est = estimateRunSec(dd, Z, goalSec);
                   return (
                     <div key={di} className="dayrow">
