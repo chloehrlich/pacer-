@@ -63,22 +63,43 @@ export default async function handler(req, res) {
   const auth = { Authorization: `Bearer ${tok.access}` };
 
   try {
-    // Find the run on the requested local date
+    // Find the day's activities (any sport — runs, rides, lifts, swims, etc.)
     const after = Math.floor(new Date(date + "T00:00:00Z").getTime() / 1000) - 86400; // pad for timezones
     const acts = await fetch(
-      `https://www.strava.com/api/v3/athlete/activities?after=${after}&per_page=20`,
+      `https://www.strava.com/api/v3/athlete/activities?after=${after}&per_page=30`,
       { headers: auth }
     ).then(r => r.json());
     if (!Array.isArray(acts)) return res.status(502).json({ error: "Strava activities fetch failed." });
 
-    const runs = acts.filter(a => a.type === "Run" && a.start_date_local && a.start_date_local.startsWith(date));
-    if (!runs.length) return res.status(404).json({ error: `No run found on Strava for ${date}. Has your watch synced yet?` });
-    // Longest run of the day (in case of a shakeout + main session)
-    const run = runs.sort((a, b) => b.distance - a.distance)[0];
+    const onDay = acts.filter(a => a.start_date_local && a.start_date_local.startsWith(date));
+    if (!onDay.length) return res.status(404).json({ error: `No activity found on Strava for ${date}. Has your watch/app synced yet?` });
+    // Primary = longest by moving time (handles a shakeout + main session, or bike + lift)
+    const primary = onDay.sort((a, b) => (b.moving_time || 0) - (a.moving_time || 0))[0];
+    const RUN_TYPES = ["Run", "TrailRun", "VirtualRun"];
+    const isRun = RUN_TYPES.includes(primary.type) || RUN_TYPES.includes(primary.sport_type);
+    const totalMovingTimeSec = onDay.reduce((s, a) => s + (a.moving_time || 0), 0);
 
-    // Pull the detailed activity for mile splits
+    const base = {
+      name: primary.name,
+      sportType: primary.sport_type || primary.type,
+      isRun,
+      startLocal: primary.start_date_local,
+      movingTimeSec: primary.moving_time,
+      elapsedTimeSec: primary.elapsed_time,
+      avgHR: primary.average_heartrate ? Math.round(primary.average_heartrate) : null,
+      maxHR: primary.max_heartrate ? Math.round(primary.max_heartrate) : null,
+      elevGainFt: primary.total_elevation_gain ? Math.round(primary.total_elevation_gain * 3.28084) : null,
+      distanceMi: primary.distance > 0 ? +(primary.distance / 1609.344).toFixed(2) : null,
+      otherCount: onDay.length - 1,
+      totalMovingTimeSec,
+    };
+
+    // Cross-training: no running splits/pace to grade — return the summary as-is.
+    if (!isRun) return res.status(200).json(base);
+
+    // Run: pull the detailed activity for mile splits + cadence.
     const detail = await fetch(
-      `https://www.strava.com/api/v3/activities/${run.id}`,
+      `https://www.strava.com/api/v3/activities/${primary.id}`,
       { headers: auth }
     ).then(r => r.json());
 
@@ -90,17 +111,10 @@ export default async function handler(req, res) {
     }));
 
     return res.status(200).json({
-      name: run.name,
-      startLocal: run.start_date_local,
-      distanceMi: +(run.distance / 1609.344).toFixed(2),
-      movingTimeSec: run.moving_time,
-      elapsedTimeSec: run.elapsed_time,
-      avgHR: run.average_heartrate ? Math.round(run.average_heartrate) : null,
-      maxHR: run.max_heartrate ? Math.round(run.max_heartrate) : null,
-      elevGainFt: run.total_elevation_gain != null ? Math.round(run.total_elevation_gain * 3.28084) : null,
+      ...base,
       // Strava reports running cadence as single-leg rpm; double it for steps/min
-      cadenceSpm: run.average_cadence ? Math.round(run.average_cadence * 2) : null,
-      sufferScore: run.suffer_score ?? null,
+      cadenceSpm: primary.average_cadence ? Math.round(primary.average_cadence * 2) : null,
+      sufferScore: primary.suffer_score ?? null,
       splits,
     });
   } catch (e) {
