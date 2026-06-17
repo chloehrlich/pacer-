@@ -165,10 +165,12 @@ function save(key, val) {
 
 /* ---------- live data sync ---------- */
 async function fetchOura(forDate) {
-  // Pull 35 days so we can compute baselines and grab today's scores in one call.
-  const end = forDate;
+  // Pull ~35 days so we can compute baselines and grab the latest night in one call.
+  // End is padded +1 day to dodge date-boundary/attribution on last night's record.
   const startD = new Date(forDate + "T12:00:00"); startD.setDate(startD.getDate() - 35);
   const start = dateKey(startD);
+  const endD = new Date(forDate + "T12:00:00"); endD.setDate(endD.getDate() + 1);
+  const end = dateKey(endD);
   const r = await fetch(`/api/oura?start=${start}&end=${end}`);
   if (!r.ok) throw new Error((await r.json()).error || `Oura proxy returned ${r.status}`);
   const { readiness, dailySleep, sleepDetail } = await r.json();
@@ -176,13 +178,21 @@ async function fetchOura(forDate) {
   const rToday = (readiness.data || []).find(d => d.day === forDate);
   const sToday = (dailySleep.data || []).find(d => d.day === forDate);
 
-  // Nightly HRV / lowest HR from the long sleep period ending on forDate
-  const nights = (sleepDetail.data || []).filter(d => d.day === forDate && d.type !== "rest");
-  const main = nights.sort((a, b) => (b.total_sleep_duration || 0) - (a.total_sleep_duration || 0))[0];
+  // Nightly HRV / lowest HR: prefer the night attributed to forDate; otherwise fall
+  // back to the most recent night that actually has the data (Oura sometimes files
+  // last night's record a day off, or it lands just after the daily scores).
+  const nights = (sleepDetail.data || []).filter(d => d.type !== "rest" && (d.average_hrv || d.lowest_heart_rate));
+  const dayDiff = day => Math.round((new Date(forDate + "T12:00:00") - new Date(day + "T12:00:00")) / 86400000);
+  const todays = nights.filter(d => d.day === forDate).sort((a, b) => (b.total_sleep_duration || 0) - (a.total_sleep_duration || 0));
+  const recent = nights
+    .filter(d => { const diff = dayDiff(d.day); return diff >= -1 && diff <= 2; })
+    .sort((a, b) => (b.day || "").localeCompare(a.day || "") || (b.total_sleep_duration || 0) - (a.total_sleep_duration || 0));
+  const main = todays[0] || recent[0] || null;
+  const mainDay = main ? main.day : null;
 
-  // Baselines: mean over the window (excluding today)
-  const hrvVals = (sleepDetail.data || []).filter(d => d.day !== forDate && d.average_hrv).map(d => d.average_hrv);
-  const rhrVals = (sleepDetail.data || []).filter(d => d.day !== forDate && d.lowest_heart_rate).map(d => d.lowest_heart_rate);
+  // Baselines: mean over the window, excluding whichever night we used as "today's".
+  const hrvVals = (sleepDetail.data || []).filter(d => d.day !== mainDay && d.average_hrv).map(d => d.average_hrv);
+  const rhrVals = (sleepDetail.data || []).filter(d => d.day !== mainDay && d.lowest_heart_rate).map(d => d.lowest_heart_rate);
   const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
 
   return {
