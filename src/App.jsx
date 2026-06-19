@@ -475,10 +475,11 @@ export default function App() {
       {tab === "today" && <Today viewDate={viewDate} logs={logs} updateLogs={updateLogs} Z={Z} settings={settings} updateSettings={updateSettings} />}
       {tab === "log" && <PostRun viewDate={viewDate} setViewDate={setViewDate} logs={logs} updateLogs={updateLogs} Z={Z} settings={settings} />}
       {tab === "plan" && <PlanView logs={logs} today={today} Z={Z} goalSec={goalSec} />}
+      {tab === "history" && <HistoryView logs={logs} today={today} />}
       {tab === "setup" && <Setup settings={settings} updateSettings={updateSettings} Z={Z} />}
 
       <nav className="tabs" aria-label="Sections">
-        {[["today","Today"],["log","Log run"],["plan","Plan"],["setup","Setup"]].map(([k, l]) => (
+        {[["today","Today"],["log","Log"],["plan","Plan"],["history","History"],["setup","Setup"]].map(([k, l]) => (
           <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
       </nav>
@@ -1070,6 +1071,230 @@ function PlanView({ logs, today, Z, goalSec }) {
           </div>
         );
       })}
+    </>
+  );
+}
+
+/* ---------------- HISTORY ---------------- */
+const TIER_COLORS = ["#1B7F4D", "#C77B00", "#E4393F"];
+const CAL_TINT = ["#E8F5EE", "#FBF3E3", "#FBE9E9"];
+function runSeconds(t) { return t ? parseGoal(t.split(":").length === 2 ? "0:" + t : t) : null; }
+function parsePlannedVol(v) { const m = String(v).match(/(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : null; }
+
+function Bars({ data, height = 110 }) {
+  const max = Math.max(1, ...data.map(d => Math.max(d.value || 0, d.planned || 0)));
+  const w = 320, pad = 4, bw = (w - pad * 2) / data.length, base = height - 16;
+  const step = Math.max(1, Math.ceil(data.length / 6));
+  return (
+    <svg viewBox={`0 0 ${w} ${height}`} width="100%" style={{ display: "block" }} aria-hidden="true">
+      {data.map((d, i) => {
+        const x = pad + i * bw;
+        const h = ((d.value || 0) / max) * base;
+        const ph = ((d.planned || 0) / max) * base;
+        return (
+          <g key={i}>
+            {d.planned ? <rect x={x + 1} y={base - ph} width={bw - 2} height={ph} fill="#E3EFF5" /> : null}
+            <rect x={x + 1} y={base - h} width={bw - 2} height={h} fill="#8FD3EE" rx="1" />
+          </g>
+        );
+      })}
+      {data.map((d, i) => i % step === 0 ? <text key={i} x={pad + i * bw + bw / 2} y={height - 3} fontSize="9" fill="#7A99A6" textAnchor="middle">{d.label}</text> : null)}
+    </svg>
+  );
+}
+function Line({ data, height = 110, color = "#0F5870" }) {
+  if (data.length < 2) return <p style={{ fontSize: 12, color: "#7A99A6" }}>Not enough data yet — keep logging.</p>;
+  const vals = data.map(d => d.value);
+  const min = Math.min(...vals), max = Math.max(...vals), range = max - min || 1;
+  const w = 320, padX = 8, padY = 14, base = height - padY;
+  const x = i => padX + (i / (data.length - 1)) * (w - padX * 2);
+  const y = v => padY + (1 - (v - min) / range) * (height - padY * 2);
+  const pts = data.map((d, i) => `${x(i).toFixed(1)},${y(d.value).toFixed(1)}`).join(" ");
+  return (
+    <svg viewBox={`0 0 ${w} ${height}`} width="100%" style={{ display: "block" }} aria-hidden="true">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="2" />
+      {data.map((d, i) => <circle key={i} cx={x(i)} cy={y(d.value)} r="2" fill={color} />)}
+      <text x={padX} y={10} fontSize="9" fill="#7A99A6">{Math.round(max)}</text>
+      <text x={padX} y={base} fontSize="9" fill="#7A99A6">{Math.round(min)}</text>
+    </svg>
+  );
+}
+
+function HistoryView({ logs, today }) {
+  const [month, setMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selected, setSelected] = useState(dateKey(today));
+  const plannedFor = (key) => { const p = planIndex(new Date(key + "T12:00:00")); return p ? PLAN[p.week].days[p.day] : null; };
+  const todayKey = dateKey(today);
+
+  // ----- aggregate stats -----
+  const runList = Object.entries(logs).filter(([, v]) => v.run).map(([k, v]) => {
+    const dist = Number(v.run.dist) || 0; const sec = runSeconds(v.run.time);
+    return { date: k, dist, sec };
+  });
+  const totalMiles = runList.reduce((s, r) => s + r.dist, 0);
+  const totalRuns = runList.length;
+  let totalCross = 0;
+  Object.values(logs).forEach(v => { if (v.cross) totalCross += normalizeCross(v.cross).sessions.length; });
+  const longest = runList.reduce((m, r) => r.dist > (m ? m.dist : 0) ? r : m, null);
+  const milesIn = (days) => runList.filter(r => { const diff = (new Date(todayKey + "T12:00:00") - new Date(r.date + "T12:00:00")) / 86400000; return diff >= 0 && diff < days; }).reduce((s, r) => s + r.dist, 0);
+  let planned = 0, completed = 0;
+  for (let w = 0; w < PLAN.length; w++) for (let dn = 0; dn < 7; dn++) {
+    const key = dateKey(new Date(PLAN_START.getTime() + (w * 7 + dn) * 86400000));
+    if (key > todayKey || classify(PLAN[w].days[dn]) === "rest") continue;
+    planned++;
+    if (logs[key] && logs[key].run) completed++;
+  }
+  const adherence = planned ? Math.round((completed / planned) * 100) : null;
+
+  // ----- charts -----
+  const weekly = PLAN.map((wk, w) => {
+    let miles = 0;
+    for (let dn = 0; dn < 7; dn++) { const key = dateKey(new Date(PLAN_START.getTime() + (w * 7 + dn) * 86400000)); if (logs[key] && logs[key].run) miles += Number(logs[key].run.dist) || 0; }
+    const monday = new Date(PLAN_START.getTime() + w * 7 * 86400000);
+    return { label: monday.toLocaleDateString(undefined, { month: "numeric", day: "numeric" }), value: +miles.toFixed(1), planned: parsePlannedVol(wk.vol) };
+  });
+  const series = (field) => Object.entries(logs).filter(([, v]) => v.checkin && v.checkin[field]).map(([k, v]) => ({ date: k, value: Number(v.checkin[field]) })).sort((a, b) => a.date.localeCompare(b.date)).slice(-42);
+  const readinessSeries = series("readiness");
+  const rhrSeries = series("rhr");
+
+  // ----- calendar -----
+  const year = month.getFullYear(), mIdx = month.getMonth();
+  const daysInMonth = new Date(year, mIdx + 1, 0).getDate();
+  const firstWk = (new Date(year, mIdx, 1).getDay() + 6) % 7; // Mon=0
+  const cells = [...Array(firstWk).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+
+  // ----- selected day -----
+  const e = logs[selected] || {};
+  const ci = e.checkin || null;
+  const run = e.run || null;
+  const crossN = e.cross ? normalizeCross(e.cross) : { sessions: [], notes: "" };
+  const selPlanned = plannedFor(selected);
+  const selWeek = planIndex(new Date(selected + "T12:00:00"));
+
+  return (
+    <>
+      <div className="card">
+        <div className="eyebrow">Your block so far</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 8 }}>
+          {[["Total miles", totalMiles.toFixed(0)], ["Runs", totalRuns], ["Cross sessions", totalCross],
+            ["Last 7 days", milesIn(7).toFixed(1) + " mi"], ["Last 28 days", milesIn(28).toFixed(0) + " mi"], ["Longest run", longest ? longest.dist + " mi" : "—"],
+            ["Adherence", adherence != null ? adherence + "%" : "—"]].map(([l, val], i) => (
+            <div key={i} style={{ background: "#F2F9FC", borderRadius: 10, padding: "8px 10px" }}>
+              <div className="bignum" style={{ fontSize: 22 }}>{val}</div>
+              <div style={{ fontSize: 11, color: "#0F5870" }}>{l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button className="btn ghost" style={{ width: "auto", margin: 0, padding: "6px 14px", fontSize: 20 }} onClick={() => setMonth(new Date(year, mIdx - 1, 1))}>‹</button>
+          <div className="disp" style={{ fontWeight: 700, fontSize: 18 }}>{month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</div>
+          <button className="btn ghost" style={{ width: "auto", margin: 0, padding: "6px 14px", fontSize: 20 }} onClick={() => setMonth(new Date(year, mIdx + 1, 1))}>›</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3, marginTop: 10 }}>
+          {["M", "T", "W", "T", "F", "S", "S"].map((dn, i) => <div key={i} style={{ textAlign: "center", fontSize: 10, color: "#7A99A6", fontWeight: 600 }}>{dn}</div>)}
+          {cells.map((dn, i) => {
+            if (!dn) return <div key={i} />;
+            const key = dateKey(new Date(year, mIdx, dn));
+            const en = logs[key];
+            const tier = en && en.checkin && en.checkin.result && en.checkin.result.ready ? en.checkin.result.ready.tier : null;
+            const hasRun = en && en.run;
+            const hasCross = en && en.cross && normalizeCross(en.cross).sessions.length;
+            const isSel = key === selected, isToday = key === todayKey;
+            return (
+              <button key={i} onClick={() => setSelected(key)} style={{
+                aspectRatio: "1", border: isSel ? "2px solid #E4393F" : isToday ? "1.5px solid #8FD3EE" : "1px solid #ECF4F8",
+                borderRadius: 8, background: tier != null ? CAL_TINT[tier] : "#fff", cursor: "pointer", padding: 2,
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1,
+              }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "#101C22" }}>{dn}</span>
+                <span style={{ display: "flex", gap: 2, height: 10, alignItems: "center" }}>
+                  {hasRun ? <Star size={9} /> : null}
+                  {hasCross ? <span style={{ fontSize: 9, color: "#0F5870" }}>●</span> : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 11, color: "#0F5870", flexWrap: "wrap" }}>
+          <span><Star size={9} /> run</span><span style={{ color: "#0F5870" }}>● cross-train</span><span>tint = readiness</span>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="eyebrow">{new Date(selected + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}{selWeek ? ` · Week ${18 - selWeek.week} of 18` : ""}</div>
+        {selPlanned && <div className="disp" style={{ fontSize: 20, fontWeight: 700, marginTop: 4 }}>{selPlanned}</div>}
+
+        {ci && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, color: "#0F5870" }}>
+              {ci.readiness ? `Readiness ${ci.readiness}` : ""}{ci.sleep ? ` · Sleep ${ci.sleep}` : ""}{ci.hrv ? ` · HRV ${ci.hrv}ms` : ""}{ci.rhr ? ` · RHR ${ci.rhr}` : ""}
+            </div>
+            {ci.result && ci.result.recovery && (
+              <p style={{ marginTop: 6, fontSize: 14, lineHeight: 1.5 }}><strong style={{ color: TIER_COLORS[ci.result.ready.tier] }}>{RECOVERY_TITLE[ci.result.ready.tier]}.</strong> {RECOVERY_ADVICE[ci.result.ready.tier]}</p>
+            )}
+            {ci.result && ci.result.ready && !ci.result.recovery && (
+              <p style={{ marginTop: 6, fontSize: 14, lineHeight: 1.5 }}><strong style={{ color: TIER_COLORS[ci.result.ready.tier] }}>{ci.result.ready.title}.</strong> {ci.result.ready.advice}</p>
+            )}
+          </div>
+        )}
+
+        {run && (
+          <div style={{ marginTop: 12, borderTop: "1px dashed #DCEDF4", paddingTop: 12 }}>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 18 }}>{run.dist}</strong> mi</span>
+              <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 18 }}>{run.time}</strong></span>
+              {runSeconds(run.time) && Number(run.dist) ? <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 18 }}>{fmtPace(runSeconds(run.time) / Number(run.dist))}</strong> /mi</span> : null}
+              {run.metrics && run.metrics.avgHR ? <span style={{ fontSize: 13 }}><strong className="bignum" style={{ fontSize: 18 }}>{run.metrics.avgHR}</strong> avg HR</span> : null}
+              {run.rpe ? <span style={{ fontSize: 13 }}>RPE <strong className="bignum" style={{ fontSize: 18 }}>{run.rpe}</strong></span> : null}
+            </div>
+            {run.verdict && <p style={{ marginTop: 8, fontSize: 14, lineHeight: 1.55, borderLeft: "3px solid #0F5870", paddingLeft: 10 }}>{run.verdict}</p>}
+            {run.notes && <p style={{ marginTop: 6, fontSize: 13, color: "#0F5870" }}>“{run.notes}”</p>}
+            {run.splits && run.splits.length > 1 && (
+              <div style={{ marginTop: 10 }}>
+                {run.splits.map(s => (
+                  <div key={s.mile} className="zone">
+                    <span style={{ fontSize: 13 }}>Mi {s.mile}</span>
+                    <span style={{ fontSize: 13 }}><span className="bignum" style={{ fontSize: 15 }}>{fmtPace(s.paceSec)}</span>{s.avgHR ? <span style={{ color: "#0F5870" }}> · {s.avgHR} bpm</span> : null}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {crossN.sessions.length > 0 && (
+          <div style={{ marginTop: 12, borderTop: "1px dashed #DCEDF4", paddingTop: 12 }}>
+            <div className="eyebrow">Cross-training</div>
+            {crossN.sessions.map((s, i) => (
+              <div key={i} className="zone">
+                <span style={{ fontSize: 13 }}>{s.sportType}{s.distanceMi ? ` · ${s.distanceMi} mi` : ""}</span>
+                <span style={{ fontSize: 13 }}><span className="bignum" style={{ fontSize: 15 }}>{fmtDuration(s.movingTimeSec)}</span>{s.avgHR ? <span style={{ color: "#0F5870" }}> · {s.avgHR} bpm</span> : null}</span>
+              </div>
+            ))}
+            {crossN.notes && <p style={{ marginTop: 6, fontSize: 13, color: "#0F5870" }}>“{crossN.notes}”</p>}
+          </div>
+        )}
+
+        {!ci && !run && crossN.sessions.length === 0 && <p style={{ marginTop: 10, fontSize: 13, color: "#7A99A6" }}>Nothing logged this day.</p>}
+      </div>
+
+      <div className="card">
+        <div className="eyebrow">Weekly mileage</div>
+        <div style={{ marginTop: 8 }}><Bars data={weekly} /></div>
+        <div style={{ fontSize: 11, color: "#7A99A6", marginTop: 2 }}>Solid = your miles · faint = planned</div>
+      </div>
+      <div className="card">
+        <div className="eyebrow">Readiness trend (last ~6 weeks)</div>
+        <div style={{ marginTop: 8 }}><Line data={readinessSeries} color="#1B7F4D" /></div>
+      </div>
+      <div className="card">
+        <div className="eyebrow">Resting HR trend (last ~6 weeks)</div>
+        <div style={{ marginTop: 8 }}><Line data={rhrSeries} color="#E4393F" /></div>
+        <div style={{ fontSize: 11, color: "#7A99A6", marginTop: 2 }}>Drifting lower over a block often tracks rising fitness.</div>
+      </div>
     </>
   );
 }
