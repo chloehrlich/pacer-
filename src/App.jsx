@@ -74,6 +74,12 @@ function fmtPace(sec) {
 }
 // Paces are stored as seconds per mile; convert for a min/km display.
 function fmtPaceKm(secPerMi) { return fmtPace(secPerMi / 1.609344); }
+// Midpoint of a "lo–hi" (or "lo-hi") gram range string; 0 if absent.
+function rangeMid(str) {
+  if (!str) return 0;
+  const p = String(str).split(/[–-]/).map(s => Number(s.trim())).filter(n => !isNaN(n));
+  return p.length ? p.reduce((a, b) => a + b, 0) / p.length : 0;
+}
 function fmtDuration(sec) {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.round(sec % 60);
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
@@ -691,21 +697,35 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
               <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 2 }}>{result.daily.postRun}</p>
             </div>
           )}
-          <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
-            <div className="eyebrow">Run fueling · carbs</div>
-            <div className="zone"><span style={{ fontSize: 14 }}>Before</span><span className="bignum" style={{ fontSize: 17 }}>{result.fuel.preG ? `${result.fuel.preG} g` : "optional"}</span></div>
-            <div className="zone"><span style={{ fontSize: 14 }}>During</span><span className="bignum" style={{ fontSize: 17 }}>{result.fuel.intraG ? `~${result.fuel.intraG} g` : "—"}</span></div>
-            <div className="zone"><span style={{ fontSize: 14 }}>After</span><span className="bignum" style={{ fontSize: 17 }}>{result.daily && result.daily.postLo != null ? `${result.daily.postLo}–${result.daily.postHi} g` : "—"}</span></div>
-          </div>
-          {result.daily && (
-            <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
-              <div className="eyebrow">All-day carb target</div>
-              <div className="bignum" style={{ fontSize: 30 }}>
-                {result.daily.lo}–{result.daily.hi}<span style={{ fontSize: 15, fontWeight: 600 }}> g</span>
-              </div>
-              <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>Whole day, food + run fueling included{result.daily.reason ? ` · ${result.daily.reason}` : ""}</div>
-            </div>
-          )}
+          {result.daily ? (() => {
+            const preMid = rangeMid(result.fuel.preG);
+            const intra = result.fuel.intraG || 0;
+            const postMid = result.daily.postLo != null ? (result.daily.postLo + result.daily.postHi) / 2 : 0;
+            const onRun = Math.round(preMid + intra + postMid);
+            const restLo = Math.max(0, result.daily.lo - onRun);
+            const restHi = Math.max(0, result.daily.hi - onRun);
+            return (
+              <>
+                <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+                  <div className="eyebrow">Run fueling · carbs</div>
+                  <div className="zone"><span style={{ fontSize: 14 }}>Before</span><span className="bignum" style={{ fontSize: 17 }}>{result.fuel.preG ? `${result.fuel.preG} g` : "optional"}</span></div>
+                  <div className="zone"><span style={{ fontSize: 14 }}>During</span><span className="bignum" style={{ fontSize: 17 }}>{result.fuel.intraG ? `~${result.fuel.intraG} g` : "—"}</span></div>
+                  <div className="zone"><span style={{ fontSize: 14 }}>After</span><span className="bignum" style={{ fontSize: 17 }}>{result.daily.postLo != null ? `${result.daily.postLo}–${result.daily.postHi} g` : "—"}</span></div>
+                  <div className="zone"><span style={{ fontSize: 14, fontWeight: 600 }}>On-run total</span><span className="bignum" style={{ fontSize: 17 }}>~{onRun} g</span></div>
+                </div>
+                <div style={{ marginTop: 12, background: "#EAF6EE", borderRadius: 10, padding: "10px 14px", border: "1px solid #CDE9D6" }}>
+                  <div className="eyebrow" style={{ color: "#1B7F4D" }}>Rest of day · meals &amp; snacks</div>
+                  <div className="bignum" style={{ fontSize: 30 }}>{restLo}–{restHi}<span style={{ fontSize: 15, fontWeight: 600 }}> g</span></div>
+                  <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>What to eat outside the run — your all-day target minus run fueling.</div>
+                </div>
+                <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+                  <div className="eyebrow">All-day carb target</div>
+                  <div className="bignum" style={{ fontSize: 24 }}>{result.daily.lo}–{result.daily.hi}<span style={{ fontSize: 13, fontWeight: 600 }}> g</span></div>
+                  <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>Whole day, everything included{result.daily.reason ? ` · ${result.daily.reason}` : ""}</div>
+                </div>
+              </>
+            );
+          })() : null}
           {!result.daily && (
             <p style={{ marginTop: 10, fontSize: 12, color: "#0F5870" }}>Add your weight in Setup to get daily carb targets and post-run numbers.</p>
           )}
