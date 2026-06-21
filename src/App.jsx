@@ -704,6 +704,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
             const onRun = Math.round(preMid + intra + postMid);
             const restLo = Math.max(0, result.daily.lo - onRun);
             const restHi = Math.max(0, result.daily.hi - onRun);
+            const restMid = Math.round((restLo + restHi) / 2 / 5) * 5;
             return (
               <>
                 <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
@@ -715,8 +716,8 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
                 </div>
                 <div style={{ marginTop: 12, background: "#EAF6EE", borderRadius: 10, padding: "10px 14px", border: "1px solid #CDE9D6" }}>
                   <div className="eyebrow" style={{ color: "#1B7F4D" }}>Rest of day · meals &amp; snacks</div>
-                  <div className="bignum" style={{ fontSize: 30 }}>{restLo}–{restHi}<span style={{ fontSize: 15, fontWeight: 600 }}> g</span></div>
-                  <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>What to eat outside the run — your all-day target minus run fueling.</div>
+                  <div className="bignum" style={{ fontSize: 30 }}>~{restMid}<span style={{ fontSize: 15, fontWeight: 600 }}> g</span></div>
+                  <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>Aim here in your meals &amp; snacks (range {restLo}–{restHi} g). Go higher before a hard or long day, lower on easy days.</div>
                 </div>
                 <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
                   <div className="eyebrow">All-day carb target</div>
