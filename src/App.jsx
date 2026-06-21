@@ -72,6 +72,8 @@ function fmtPace(sec) {
   const m = Math.floor(sec / 60), s = Math.round(sec % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+// Paces are stored as seconds per mile; convert for a min/km display.
+function fmtPaceKm(secPerMi) { return fmtPace(secPerMi / 1.609344); }
 function fmtDuration(sec) {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.round(sec % 60);
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
@@ -639,6 +641,9 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
               <div className="bignum" style={{ fontSize: 34 }}>
                 {fmtPace(result.adjZone[0])}–{fmtPace(result.adjZone[1])}<span style={{ fontSize: 16, fontWeight: 600 }}> /mi</span>
               </div>
+              <div className="bignum" style={{ fontSize: 18, color: "#0F5870" }}>
+                {fmtPaceKm(result.adjZone[0])}–{fmtPaceKm(result.adjZone[1])}<span style={{ fontSize: 12, fontWeight: 600 }}> /km</span>
+              </div>
               <div style={{ fontSize: 12, color: "#0F5870" }}>{meta.label}, heat-corrected{result.ready.tier === 1 ? " — favor the slow end today" : ""}</div>
             </div>
           )}
@@ -647,6 +652,9 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
               <div className="eyebrow" style={{ color: "#E4393F" }}>If you run: easy only</div>
               <div className="bignum" style={{ fontSize: 34 }}>
                 {fmtPace(Z.recovery[0] * (1 + (result.heat ? result.heat.lo : 0)))}–{fmtPace(Z.recovery[1] * (1 + (result.heat ? result.heat.hi : 0)))}<span style={{ fontSize: 16, fontWeight: 600 }}> /mi</span>
+              </div>
+              <div className="bignum" style={{ fontSize: 18, color: "#0F5870" }}>
+                {fmtPaceKm(Z.recovery[0] * (1 + (result.heat ? result.heat.lo : 0)))}–{fmtPaceKm(Z.recovery[1] * (1 + (result.heat ? result.heat.hi : 0)))}<span style={{ fontSize: 12, fontWeight: 600 }}> /km</span>
               </div>
             </div>
           )}
@@ -1330,7 +1338,11 @@ function Setup({ settings, updateSettings, Z }) {
         {[["Recovery","recovery"],["General aerobic","ga"],["Medium-long / long","long"],["Marathon pace","mp"],["Lactate threshold","lt"],["VO₂max (5K)","vo2"]].map(([l, k]) => (
           <div key={k} className="zone">
             <span style={{ fontSize: 14, fontWeight: 500 }}>{l}</span>
-            <span className="bignum" style={{ fontSize: 18 }}>{fmtPace(Z[k][0])}–{fmtPace(Z[k][1])} /mi</span>
+            <span style={{ textAlign: "right" }}>
+              <span className="bignum" style={{ fontSize: 18 }}>{fmtPace(Z[k][0])}–{fmtPace(Z[k][1])} /mi</span>
+              <br />
+              <span className="bignum" style={{ fontSize: 13, color: "#0F5870" }}>{fmtPaceKm(Z[k][0])}–{fmtPaceKm(Z[k][1])} /km</span>
+            </span>
           </div>
         ))}
       </div>
