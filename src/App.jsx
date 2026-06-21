@@ -266,20 +266,25 @@ function fuelPlan({ type, miles, paceMidSec, heatSum, weeksToGoal }) {
   const hot = heatSum >= 130, veryHot = heatSum >= 150;
 
   // --- pre-run ---
-  let pre;
+  let pre, preG;
   if (durationMin <= 70 && !isQuality) {
     pre = "Optional — water + coffee is fine. If hungry: half a banana or a few dates ~30 min out. Low-fiber, low-fat.";
+    preG = null;
   } else if (isQuality && durationMin <= 90) {
     pre = "30–40 g carbs 60–90 min before (toast + honey, banana, or an applesauce pouch) + 8–12 oz water. Caffeine if you want it — quality work earns it.";
+    preG = "30–40";
   } else {
     pre = "50–75 g carbs 90–120 min before (oatmeal + honey + banana is the GI-safe combo) + 16 oz water, then a few sips 15 min out.";
+    preG = "50–75";
   }
 
   // --- intra-run ---
   const intra = [];
+  let intraG = 0;
   if (durationMin >= 75) {
     const fueledHours = Math.max(0, (durationMin - 20) / 60); // first gel ~25 min in
     const gels = Math.max(1, Math.round((fueledHours * carbTarget) / 40));
+    intraG = gels * 40; // each gel ≈ 40 g carbs
     const interval = Math.max(20, Math.min(35, Math.round((durationMin - 25) / gels)));
     const times = Array.from({ length: gels }, (_, i) => {
       const t = 25 + i * interval;
@@ -307,7 +312,7 @@ function fuelPlan({ type, miles, paceMidSec, heatSum, weeksToGoal }) {
     hydro += ".";
   }
 
-  return { pre, intra, hydro, durationMin: Math.round(durationMin), carbTarget };
+  return { pre, intra, hydro, durationMin: Math.round(durationMin), carbTarget, preG, intraG };
 }
 
 /* ---------- daily carb targets: periodized + day-before priming ----------
@@ -330,14 +335,14 @@ function dailyCarbs({ type, tomorrowType, isRaceLoad, weightKg, durationMin }) {
   const lo = Math.round((range[0] * weightKg) / 5) * 5;
   const hi = Math.round((range[1] * weightKg) / 5) * 5;
   // post-run window: quality sessions and runs ≥90 min
-  let postRun = null;
+  let postRun = null, postLo = null, postHi = null;
   const qualityDay = ["lt", "vo2", "mp", "long", "tuneup", "race"].includes(type);
   if ((qualityDay || (durationMin && durationMin >= 90)) && type !== "rest") {
-    const pLo = Math.round((1.0 * weightKg) / 5) * 5;
-    const pHi = Math.round((1.2 * weightKg) / 5) * 5;
-    postRun = `${pLo}–${pHi} g carbs + 20–30 g protein within ~60 min of finishing. Heat kills appetite — a smoothie or chocolate milk counts; don't skip it.`;
+    postLo = Math.round((1.0 * weightKg) / 5) * 5;
+    postHi = Math.round((1.2 * weightKg) / 5) * 5;
+    postRun = `${postLo}–${postHi} g carbs + 20–30 g protein within ~60 min of finishing. Heat kills appetite — a smoothie or chocolate milk counts; don't skip it.`;
   }
-  return { lo, hi, reason, postRun };
+  return { lo, hi, reason, postRun, postLo, postHi };
 }
 
 const Star = ({ size = 14, color = "#E4393F", style }) => (
@@ -686,13 +691,19 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
               <p style={{ fontSize: 14, lineHeight: 1.5, marginTop: 2 }}>{result.daily.postRun}</p>
             </div>
           )}
+          <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+            <div className="eyebrow">Run fueling · carbs</div>
+            <div className="zone"><span style={{ fontSize: 14 }}>Before</span><span className="bignum" style={{ fontSize: 17 }}>{result.fuel.preG ? `${result.fuel.preG} g` : "optional"}</span></div>
+            <div className="zone"><span style={{ fontSize: 14 }}>During</span><span className="bignum" style={{ fontSize: 17 }}>{result.fuel.intraG ? `~${result.fuel.intraG} g` : "—"}</span></div>
+            <div className="zone"><span style={{ fontSize: 14 }}>After</span><span className="bignum" style={{ fontSize: 17 }}>{result.daily && result.daily.postLo != null ? `${result.daily.postLo}–${result.daily.postHi} g` : "—"}</span></div>
+          </div>
           {result.daily && (
             <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
-              <div className="eyebrow">Today's total carbs</div>
+              <div className="eyebrow">All-day carb target</div>
               <div className="bignum" style={{ fontSize: 30 }}>
                 {result.daily.lo}–{result.daily.hi}<span style={{ fontSize: 15, fontWeight: 600 }}> g</span>
               </div>
-              {result.daily.reason && <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>{result.daily.reason}</div>}
+              <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>Whole day, food + run fueling included{result.daily.reason ? ` · ${result.daily.reason}` : ""}</div>
             </div>
           )}
           {!result.daily && (
@@ -728,7 +739,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
             if (!daily) return <p style={{ marginTop: 10, fontSize: 12, color: "#0F5870" }}>Add your weight in Setup to get daily carb targets.</p>;
             return (
               <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
-                <div className="eyebrow">Today's total carbs</div>
+                <div className="eyebrow">All-day carb target</div>
                 <div className="bignum" style={{ fontSize: 30 }}>
                   {daily.lo}–{daily.hi}<span style={{ fontSize: 15, fontWeight: 600 }}> g</span>
                 </div>
