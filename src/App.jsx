@@ -1340,9 +1340,31 @@ function HistoryView({ logs, today }) {
 }
 
 /* ---------------- SETUP ---------------- */
+const STRENGTH_PRINCIPLES = [
+  "Stack lifts on your quality or long-run days — keep easy days genuinely easy. Run first, lift after.",
+  "2 sessions a week, 30–40 min each. Heavy-ish, low reps, and never to failure.",
+  "Keep the day after a lift truly easy. Avoid lifting after ~7pm if it costs you sleep.",
+  "Lean into strength + plyometrics early in the block; drop heavy lifting ~10 days out from race day.",
+];
+const STRENGTH_SESSIONS = [
+  { name: "Day A · lower-body strength", note: "stack after a quality run", moves: [
+    "Squat or trap-bar deadlift — 3–4 × 4–6 (heavy, ~2 reps in reserve)",
+    "Split squat / step-up — 3 × 6–8 per leg",
+    "Single-leg calf raise — 3 × 8–12",
+    "Core — plank / dead bug — 2–3 sets",
+  ] },
+  { name: "Day B · posterior chain + power", note: "stack on another quality / long day", moves: [
+    "Romanian deadlift or hip thrust — 3 × 6–8",
+    "Nordic or hamstring curl — 3 × 5–8",
+    "Plyometrics (pogo hops, bounding) — early block; drop ~3 wks out",
+    "Glute med (band walks) + Pallof core — 2 sets each",
+  ] },
+];
+
 function Setup({ settings, updateSettings, Z }) {
   const [form, setForm] = useState(settings);
   const [saved, setSavedMsg] = useState(false);
+  const [showStr, setShowStr] = useState(false);
   const doSave = () => {
     updateSettings(form);
     setSavedMsg(true);
@@ -1377,6 +1399,36 @@ function Setup({ settings, updateSettings, Z }) {
             </span>
           </div>
         ))}
+      </div>
+      <div className="card">
+        <div className="wkhead" onClick={() => setShowStr(!showStr)} style={{ margin: 0, border: "none", padding: 0, background: "none" }}>
+          <div className="eyebrow">Strength training</div>
+          <span className="bignum" style={{ fontSize: 18, color: "#0F5870" }}>{showStr ? "–" : "+"}</span>
+        </div>
+        {!showStr && <p style={{ fontSize: 12, color: "#0F5870", marginTop: 4 }}>When to lift, and a 2-day template for runners. Tap to expand.</p>}
+        {showStr && (
+          <div style={{ marginTop: 10 }}>
+            <div className="eyebrow" style={{ fontSize: 11, letterSpacing: ".14em" }}>How to fit it in</div>
+            {STRENGTH_PRINCIPLES.map((p, i) => (
+              <p key={i} style={{ fontSize: 13, lineHeight: 1.5, marginTop: 6, paddingLeft: 12, position: "relative" }}>
+                <span style={{ position: "absolute", left: 0, color: "#E4393F" }}>•</span>{p}
+              </p>
+            ))}
+            {STRENGTH_SESSIONS.map((s, i) => (
+              <div key={i} style={{ marginTop: 14, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+                <div className="disp" style={{ fontWeight: 700, fontSize: 16 }}>{s.name}</div>
+                <div style={{ fontSize: 12, color: "#0F5870", marginBottom: 4 }}>{s.note}</div>
+                {s.moves.map((m, j) => (
+                  <div key={j} className="dayrow" style={{ padding: "4px 0", fontSize: 13 }}>
+                    <Star size={9} style={{ marginTop: 4, flexShrink: 0 }} />
+                    <span style={{ flex: 1 }}>{m}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p style={{ fontSize: 11, color: "#7A99A6", marginTop: 10, lineHeight: 1.5 }}>General best-practice, not medical advice — adjust for your body and any injury history, and consider one session with a coach or PT to vet form on the heavy lifts.</p>
+          </div>
+        )}
       </div>
     </>
   );
