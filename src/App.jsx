@@ -162,6 +162,12 @@ function planIndex(d) {
   if (dd < 0 || dd >= PLAN.length * 7) return null;
   return { week: Math.floor(dd / 7), day: dd % 7 };
 }
+// Effective workout for a date: a saved override (logs[key].plan) wins over the plan.
+function workoutFor(key, logs) {
+  if (logs && logs[key] && logs[key].plan) return logs[key].plan;
+  const p = planIndex(new Date(key + "T12:00:00"));
+  return p ? PLAN[p.week].days[p.day] : null;
+}
 
 /* localStorage persistence */
 function load(key, fallback) {
@@ -487,7 +493,7 @@ export default function App() {
 
       {tab === "today" && <Today viewDate={viewDate} logs={logs} updateLogs={updateLogs} Z={Z} settings={settings} updateSettings={updateSettings} />}
       {tab === "log" && <PostRun viewDate={viewDate} setViewDate={setViewDate} logs={logs} updateLogs={updateLogs} Z={Z} settings={settings} />}
-      {tab === "plan" && <PlanView logs={logs} today={today} Z={Z} goalSec={goalSec} />}
+      {tab === "plan" && <PlanView logs={logs} today={today} Z={Z} goalSec={goalSec} updateLogs={updateLogs} settings={settings} />}
       {tab === "history" && <HistoryView logs={logs} today={today} />}
       {tab === "setup" && <Setup settings={settings} updateSettings={updateSettings} Z={Z} />}
 
@@ -512,7 +518,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
   if (!idx) return <div className="card">This date falls outside the 18-week block (Jun 8 – Oct 11).</div>;
 
   const wk = PLAN[idx.week];
-  const workout = wk.days[idx.day];
+  const workout = (logs[viewDate] && logs[viewDate].plan) || wk.days[idx.day];
   const type = classify(workout);
   const meta = TYPE_META[type];
   const isRest = type === "rest";
@@ -561,8 +567,8 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
     const paceMidSec = zoneMid ? (["lt", "vo2", "mp", "tuneup"].includes(type) ? (zoneMid + gaMid) / 2 : zoneMid) : null;
     const fuel = fuelPlan({ type, miles: parseMiles(workout), paceMidSec, heatSum: heat.sum, weeksToGoal: wk.wk });
     // Tomorrow's workout for day-before priming; race-week load = Thu/Fri/Sat before the marathon
-    const tomorrowIdx = planIndex(new Date(d.getTime() + 86400000));
-    const tomorrowType = tomorrowIdx ? classify(PLAN[tomorrowIdx.week].days[tomorrowIdx.day]) : null;
+    const tw = workoutFor(dateKey(new Date(d.getTime() + 86400000)), logs);
+    const tomorrowType = tw ? classify(tw) : null;
     const isRaceLoad = wk.wk === 0 && idx.day >= 3 && idx.day <= 5;
     const weightKg = Number(settings.weightLb) ? Number(settings.weightLb) / 2.205 : null;
     const daily = dailyCarbs({ type, tomorrowType, isRaceLoad, weightKg, durationMin: fuel ? fuel.durationMin : null });
@@ -642,7 +648,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
           {result.heat && result.heat.hi > 0 && !result.heat.noHard && (
             <p style={{ marginTop: 8, fontSize: 13, color: "#0F5870" }}>
               Heat (Hadley method): temp + dew point = {result.heat.sum} → +{(result.heat.lo * 100).toFixed(1)}–{(result.heat.hi * 100).toFixed(1)}% on paces{" "}
-              {PLAN[idx.week] && classify(PLAN[idx.week].days[idx.day]) === "vo2" ? "(halved for short intervals)" : ""}.
+              {type === "vo2" ? "(halved for short intervals)" : ""}.
               Same effort, slower splits — that's the deal in summer.
             </p>
           )}
@@ -704,6 +710,7 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
             const onRun = Math.round(preMid + intra + postMid);
             const restLo = Math.max(0, result.daily.lo - onRun);
             const restHi = Math.max(0, result.daily.hi - onRun);
+            const restMid = Math.round((restLo + restHi) / 2 / 5) * 5;
             return (
               <>
                 <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
@@ -715,8 +722,8 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
                 </div>
                 <div style={{ marginTop: 12, background: "#EAF6EE", borderRadius: 10, padding: "10px 14px", border: "1px solid #CDE9D6" }}>
                   <div className="eyebrow" style={{ color: "#1B7F4D" }}>Rest of day · meals &amp; snacks</div>
-                  <div className="bignum" style={{ fontSize: 30 }}>{restLo}–{restHi}<span style={{ fontSize: 15, fontWeight: 600 }}> g</span></div>
-                  <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>What to eat outside the run — your all-day target minus run fueling.</div>
+                  <div className="bignum" style={{ fontSize: 30 }}>~{restMid}<span style={{ fontSize: 15, fontWeight: 600 }}> g</span></div>
+                  <div style={{ fontSize: 12, color: "#0F5870", marginTop: 2 }}>Aim here in your meals &amp; snacks (range {restLo}–{restHi} g). Go higher before a hard or long day, lower on easy days.</div>
                 </div>
                 <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
                   <div className="eyebrow">All-day carb target</div>
@@ -751,8 +758,8 @@ function Today({ viewDate, logs, updateLogs, Z, settings, updateSettings }) {
         <div className="card">
           <p style={{ fontSize: 15, lineHeight: 1.5 }}>Rest or easy cross-training today. The plan only works if these days stay genuinely easy.</p>
           {(() => {
-            const tomorrowIdx = planIndex(new Date(d.getTime() + 86400000));
-            const tomorrowType = tomorrowIdx ? classify(PLAN[tomorrowIdx.week].days[tomorrowIdx.day]) : null;
+            const tw = workoutFor(dateKey(new Date(d.getTime() + 86400000)), logs);
+            const tomorrowType = tw ? classify(tw) : null;
             const isRaceLoad = wk.wk === 0 && idx.day >= 3 && idx.day <= 5;
             const weightKg = Number(settings.weightLb) ? Number(settings.weightLb) / 2.205 : null;
             const daily = dailyCarbs({ type: "rest", tomorrowType, isRaceLoad, weightKg, durationMin: null });
@@ -842,7 +849,7 @@ function PostRun({ viewDate, setViewDate, logs, updateLogs, Z, settings }) {
 
   const d = new Date(viewDate + "T12:00:00");
   const idx = planIndex(d);
-  const workout = idx ? PLAN[idx.week].days[idx.day] : null;
+  const workout = workoutFor(viewDate, logs);
   const type = workout ? classify(workout) : "ga";
   const meta = TYPE_META[type];
 
@@ -902,12 +909,11 @@ function PostRun({ viewDate, setViewDate, logs, updateLogs, Z, settings }) {
       .sort((a, b) => b[0].localeCompare(a[0]))
       .slice(0, 10)
       .map(([k, v]) => {
-        const pIdx = planIndex(new Date(k + "T12:00:00"));
         const rd = Number(v.run.dist) || null;
         const rt = v.run.time ? parseGoal(v.run.time.split(":").length === 2 ? "0:" + v.run.time : v.run.time) : null;
         return {
           date: k,
-          planned: pIdx ? PLAN[pIdx.week].days[pIdx.day] : null,
+          planned: workoutFor(k, logs),
           miles: rd,
           avgPace: rt && rd ? fmtPace(rt / rd) : null,
           rpe: v.run.rpe || null,
@@ -1067,19 +1073,24 @@ function History({ logs }) {
 }
 
 /* ---------------- PLAN ---------------- */
-function PlanView({ logs, today, Z, goalSec }) {
+const MOVE_EXTRAS = ["Recovery 5 mi", "Gen-aerobic 8 mi", "Rest or cross-train", "Travel — off (rest)"];
+
+function PlanView({ logs, today, Z, goalSec, updateLogs, settings }) {
   const cur = planIndex(today);
   const [open, setOpen] = useState(cur ? cur.week : 0);
+  const [editWeek, setEditWeek] = useState(-1);
   return (
     <>
       <p style={{ margin: "0 16px 10px", fontSize: 12, color: "#0F5870" }}>
-        Times are estimates at your goal pace (no heat) — handy for planning your wake-up. Summer mornings run a touch slower.
+        Times are estimates at your goal pace (no heat). Tap <strong>Adjust week</strong> to move sessions around for travel — Claude will sanity-check the reshuffle.
       </p>
       {PLAN.map((wk, wi) => {
         const monday = new Date(PLAN_START.getTime() + wi * 7 * 86400000);
         const label = monday.toLocaleDateString(undefined, { month: "short", day: "numeric" });
         const isOpen = open === wi;
         const isCur = cur && cur.week === wi;
+        const keys = Array.from({ length: 7 }, (_, di) => dateKey(new Date(PLAN_START.getTime() + (wi * 7 + di) * 86400000)));
+        const moved = keys.some((k, di) => logs[k] && logs[k].plan && logs[k].plan !== wk.days[di]);
         return (
           <div key={wi}>
             <div className="wkhead" onClick={() => setOpen(isOpen ? -1 : wi)} style={isCur ? { borderColor: "#E4393F" } : null}>
@@ -1087,30 +1098,125 @@ function PlanView({ logs, today, Z, goalSec }) {
                 <span className="disp" style={{ fontWeight: 700, fontSize: 17 }}>Week of {label}</span>
                 <span style={{ fontSize: 12, color: "#0F5870", marginLeft: 8 }}>{wk.block}</span>
                 {isCur && <span style={{ background: "#E4393F", color: "#fff", borderRadius: 99, padding: "2px 8px", fontSize: 11, fontWeight: 600, marginLeft: 8 }}>Now</span>}
+                {moved && <span style={{ background: "#0F5870", color: "#fff", borderRadius: 99, padding: "2px 8px", fontSize: 11, fontWeight: 600, marginLeft: 8 }}>Adjusted</span>}
               </div>
               <span className="bignum" style={{ fontSize: 16 }}>{wk.vol}</span>
             </div>
             {isOpen && (
-              <div style={{ margin: "0 16px 14px", background: "#fff", border: "1px solid #DCEDF4", borderRadius: 12, padding: "6px 0" }}>
-                {wk.days.map((dd, di) => {
-                  const key = dateKey(new Date(PLAN_START.getTime() + (wi * 7 + di) * 86400000));
-                  const done = logs[key] && (logs[key].run || logs[key].cross);
-                  const est = estimateRunSec(dd, Z, goalSec);
-                  return (
-                    <div key={di} className="dayrow">
-                      <span className="dn">{DAY_NAMES[di].slice(0, 3)}</span>
-                      <span style={{ flex: 1, color: classify(dd) === "rest" ? "#7A99A6" : "#101C22" }}>{dd}</span>
-                      {est && <span className="bignum" style={{ fontSize: 13, color: "#0F5870", whiteSpace: "nowrap", marginLeft: 8 }}>~{fmtEstimate(est)}</span>}
-                      {done && <Star size={13} style={{ marginLeft: 6 }} />}
-                    </div>
-                  );
-                })}
-              </div>
+              <>
+                <div style={{ margin: "0 16px 8px", background: "#fff", border: "1px solid #DCEDF4", borderRadius: 12, padding: "6px 0" }}>
+                  {wk.days.map((orig, di) => {
+                    const key = keys[di];
+                    const dd = (logs[key] && logs[key].plan) || orig;
+                    const done = logs[key] && (logs[key].run || logs[key].cross);
+                    const est = estimateRunSec(dd, Z, goalSec);
+                    const isMoved = logs[key] && logs[key].plan && logs[key].plan !== orig;
+                    return (
+                      <div key={di} className="dayrow">
+                        <span className="dn">{DAY_NAMES[di].slice(0, 3)}</span>
+                        <span style={{ flex: 1, color: classify(dd) === "rest" ? "#7A99A6" : "#101C22" }}>{dd}{isMoved && <span style={{ color: "#0F5870", fontSize: 11 }}> · moved</span>}</span>
+                        {est && <span className="bignum" style={{ fontSize: 13, color: "#0F5870", whiteSpace: "nowrap", marginLeft: 8 }}>~{fmtEstimate(est)}</span>}
+                        {done && <Star size={13} style={{ marginLeft: 6 }} />}
+                      </div>
+                    );
+                  })}
+                  <div style={{ padding: "6px 16px 2px" }}>
+                    <button className="btn ghost" style={{ width: "auto", margin: 0, padding: "6px 14px", fontSize: 14 }} onClick={() => setEditWeek(editWeek === wi ? -1 : wi)}>
+                      {editWeek === wi ? "Done adjusting" : "Adjust week"}
+                    </button>
+                  </div>
+                </div>
+                {editWeek === wi && <WeekEditor wi={wi} keys={keys} logs={logs} updateLogs={updateLogs} settings={settings} />}
+              </>
             )}
           </div>
         );
       })}
     </>
+  );
+}
+
+function WeekEditor({ wi, keys, logs, updateLogs, settings }) {
+  const wk = PLAN[wi];
+  const baseOptions = Array.from(new Set([...wk.days, ...MOVE_EXTRAS]));
+  const lockedOf = di => (logs[keys[di]] && logs[keys[di]].plan) || wk.days[di];
+  // Draft = a sandbox; nothing touches the real schedule until "Lock in".
+  const [draft, setDraft] = useState(() => wk.days.map((_, di) => lockedOf(di)));
+  const [customDays, setCustomDays] = useState({});
+  const [note, setNote] = useState("");
+  const [coach, setCoach] = useState({ busy: false, text: null });
+  const [locked, setLocked] = useState(false);
+
+  const setVal = (di, v) => { setDraft(d => d.map((x, i) => i === di ? v : x)); setLocked(false); };
+  const onSelect = (di, v) => {
+    if (v === "__custom__") setCustomDays(c => ({ ...c, [di]: true }));
+    else { setCustomDays(c => ({ ...c, [di]: false })); setVal(di, v); }
+  };
+  const showCustom = di => customDays[di] || !baseOptions.includes(draft[di]);
+  const dirty = draft.some((v, di) => v !== lockedOf(di));
+
+  const lockIn = () => {
+    draft.forEach((v, di) => updateLogs(keys[di], { plan: v === wk.days[di] ? null : v }));
+    setLocked(true);
+  };
+  const resetPlan = () => {
+    keys.forEach(k => updateLogs(k, { plan: null }));
+    setDraft(wk.days.slice());
+    setCustomDays({});
+    setLocked(false);
+  };
+
+  const coachCheck = async () => {
+    setCoach({ busy: true, text: null });
+    const original = wk.days.map((d, di) => `${DAY_NAMES[di].slice(0, 3)}: ${d}`);
+    const adjusted = draft.map((d, di) => `${DAY_NAMES[di].slice(0, 3)}: ${d}`);
+    const recent = Object.entries(logs)
+      .filter(([k, v]) => v.run && k < keys[0])
+      .sort((a, b) => b[0].localeCompare(a[0])).slice(0, 7)
+      .map(([k, v]) => ({ date: k, miles: Number(v.run.dist) || null, rpe: v.run.rpe || null }));
+    const ctx = {
+      goal: settings.goal,
+      week: { number: 18 - wi, block: wk.block, plannedVolume: wk.vol },
+      original, adjusted, recentRuns: recent, travelNote: note || null,
+    };
+    let text = null;
+    try {
+      const r = await fetch("/api/adjust", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ctx) });
+      const j = await r.json().catch(() => ({}));
+      text = r.ok ? (j.advice || "").trim() : (j.error || "Coach check unavailable right now.");
+    } catch { text = "Coach check unavailable right now."; }
+    setCoach({ busy: false, text });
+  };
+
+  return (
+    <div className="card" style={{ borderLeft: "5px solid #0F5870" }}>
+      <div className="eyebrow">Adjust this week · draft</div>
+      <p style={{ fontSize: 12, color: "#0F5870", margin: "6px 0 10px" }}>Try a reshuffle, run a coach check, tweak it, then <strong>Lock in</strong> when it's good. Nothing changes your real schedule until you lock it.</p>
+      {wk.days.map((orig, di) => (
+        <div key={di} style={{ marginBottom: 8 }}>
+          <label className="f" style={{ margin: "0 0 2px" }}>{DAY_NAMES[di]}{draft[di] !== orig && <span style={{ color: "#0F5870" }}> · changed</span>}</label>
+          {showCustom(di) ? (
+            <input className="f" value={draft[di]} onChange={e => setVal(di, e.target.value)} placeholder="e.g. Long run 14 mi" />
+          ) : (
+            <select className="f" value={draft[di]} onChange={e => onSelect(di, e.target.value)}>
+              {Array.from(new Set([draft[di], ...baseOptions])).map((o, j) => <option key={j} value={o}>{o}</option>)}
+              <option value="__custom__">✎ Custom…</option>
+            </select>
+          )}
+        </div>
+      ))}
+      <label className="f">Context for the coach (optional)</label>
+      <textarea className="f" rows={2} value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. flying Wed, only a hotel treadmill Thu–Fri, back Sat" />
+      <button className="btn alt" onClick={coachCheck} disabled={coach.busy} style={{ opacity: coach.busy ? 0.6 : 1 }}>{coach.busy ? "Asking the coach…" : "Coach check this draft"}</button>
+      {coach.text && (
+        <div style={{ marginTop: 12, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+          <div className="eyebrow">Coach's read</div>
+          <p style={{ fontSize: 14, lineHeight: 1.55, marginTop: 6, whiteSpace: "pre-wrap" }}>{coach.text}</p>
+        </div>
+      )}
+      <button className="btn" onClick={lockIn} disabled={!dirty && !locked} style={{ marginTop: 12, opacity: (!dirty && !locked) ? 0.5 : 1 }}>{locked && !dirty ? "Locked in ✓" : "Lock in to schedule"}</button>
+      <button className="btn ghost" onClick={resetPlan} style={{ marginTop: 8 }}>Reset week to original plan</button>
+    </div>
   );
 }
 
@@ -1162,7 +1268,7 @@ function Line({ data, height = 110, color = "#0F5870" }) {
 function HistoryView({ logs, today }) {
   const [month, setMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selected, setSelected] = useState(dateKey(today));
-  const plannedFor = (key) => { const p = planIndex(new Date(key + "T12:00:00")); return p ? PLAN[p.week].days[p.day] : null; };
+  const plannedFor = (key) => workoutFor(key, logs);
   const todayKey = dateKey(today);
 
   // ----- aggregate stats -----
@@ -1179,7 +1285,7 @@ function HistoryView({ logs, today }) {
   let planned = 0, completed = 0;
   for (let w = 0; w < PLAN.length; w++) for (let dn = 0; dn < 7; dn++) {
     const key = dateKey(new Date(PLAN_START.getTime() + (w * 7 + dn) * 86400000));
-    if (key > todayKey || classify(PLAN[w].days[dn]) === "rest") continue;
+    if (key > todayKey || classify(workoutFor(key, logs)) === "rest") continue;
     planned++;
     if (logs[key] && logs[key].run) completed++;
   }
@@ -1339,9 +1445,31 @@ function HistoryView({ logs, today }) {
 }
 
 /* ---------------- SETUP ---------------- */
+const STRENGTH_PRINCIPLES = [
+  "Stack lifts on your quality or long-run days — keep easy days genuinely easy. Run first, lift after.",
+  "2 sessions a week, 30–40 min each. Heavy-ish, low reps, and never to failure.",
+  "Keep the day after a lift truly easy. Avoid lifting after ~7pm if it costs you sleep.",
+  "Lean into strength + plyometrics early in the block; drop heavy lifting ~10 days out from race day.",
+];
+const STRENGTH_SESSIONS = [
+  { name: "Day A · lower-body strength", note: "stack after a quality run", moves: [
+    "Squat or trap-bar deadlift — 3–4 × 4–6 (heavy, ~2 reps in reserve)",
+    "Split squat / step-up — 3 × 6–8 per leg",
+    "Single-leg calf raise — 3 × 8–12",
+    "Core — plank / dead bug — 2–3 sets",
+  ] },
+  { name: "Day B · posterior chain + power", note: "stack on another quality / long day", moves: [
+    "Romanian deadlift or hip thrust — 3 × 6–8",
+    "Nordic or hamstring curl — 3 × 5–8",
+    "Plyometrics (pogo hops, bounding) — early block; drop ~3 wks out",
+    "Glute med (band walks) + Pallof core — 2 sets each",
+  ] },
+];
+
 function Setup({ settings, updateSettings, Z }) {
   const [form, setForm] = useState(settings);
   const [saved, setSavedMsg] = useState(false);
+  const [showStr, setShowStr] = useState(false);
   const doSave = () => {
     updateSettings(form);
     setSavedMsg(true);
@@ -1376,6 +1504,36 @@ function Setup({ settings, updateSettings, Z }) {
             </span>
           </div>
         ))}
+      </div>
+      <div className="card">
+        <div className="wkhead" onClick={() => setShowStr(!showStr)} style={{ margin: 0, border: "none", padding: 0, background: "none" }}>
+          <div className="eyebrow">Strength training</div>
+          <span className="bignum" style={{ fontSize: 18, color: "#0F5870" }}>{showStr ? "–" : "+"}</span>
+        </div>
+        {!showStr && <p style={{ fontSize: 12, color: "#0F5870", marginTop: 4 }}>When to lift, and a 2-day template for runners. Tap to expand.</p>}
+        {showStr && (
+          <div style={{ marginTop: 10 }}>
+            <div className="eyebrow" style={{ fontSize: 11, letterSpacing: ".14em" }}>How to fit it in</div>
+            {STRENGTH_PRINCIPLES.map((p, i) => (
+              <p key={i} style={{ fontSize: 13, lineHeight: 1.5, marginTop: 6, paddingLeft: 12, position: "relative" }}>
+                <span style={{ position: "absolute", left: 0, color: "#E4393F" }}>•</span>{p}
+              </p>
+            ))}
+            {STRENGTH_SESSIONS.map((s, i) => (
+              <div key={i} style={{ marginTop: 14, background: "#F2F9FC", borderRadius: 10, padding: "10px 14px" }}>
+                <div className="disp" style={{ fontWeight: 700, fontSize: 16 }}>{s.name}</div>
+                <div style={{ fontSize: 12, color: "#0F5870", marginBottom: 4 }}>{s.note}</div>
+                {s.moves.map((m, j) => (
+                  <div key={j} className="dayrow" style={{ padding: "4px 0", fontSize: 13 }}>
+                    <Star size={9} style={{ marginTop: 4, flexShrink: 0 }} />
+                    <span style={{ flex: 1 }}>{m}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p style={{ fontSize: 11, color: "#7A99A6", marginTop: 10, lineHeight: 1.5 }}>General best-practice, not medical advice — adjust for your body and any injury history, and consider one session with a coach or PT to vet form on the heavy lifts.</p>
+          </div>
+        )}
       </div>
     </>
   );
